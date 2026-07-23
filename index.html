@@ -212,6 +212,14 @@
   .chart-block{margin-top:16px;}
   .chart-block h4{font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); font-weight:800; margin:0 0 8px;}
   .h2h-table td, .h2h-table th{font-size:12.5px;}
+  .rating-row{border:2px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:8px; background:#fff; cursor:pointer;}
+  .rating-row-head{display:flex; justify-content:space-between; align-items:center;}
+  .rating-name{font-weight:800; font-size:14px;}
+  .rating-badge{font-family:'Anton',sans-serif; font-size:16px; display:flex; align-items:center; gap:8px;}
+  .rating-label{font-family:'Manrope',sans-serif; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted);}
+  .rating-detail{margin-top:10px; padding-top:10px; border-top:1px solid var(--line); display:grid; grid-template-columns:1fr 1fr; gap:6px 16px;}
+  .rating-comp{display:flex; justify-content:space-between; font-size:12.5px; font-weight:700;}
+  .rating-comp small{color:var(--muted); font-weight:600;}
   .result-card-wrap{position:fixed; left:-9999px; top:0;}
   .rc-card{width:640px; padding:44px; background:var(--court); background-image: radial-gradient(circle at 85% -10%, rgba(215,230,57,0.25), transparent 45%); color:var(--kitchen); font-family:'Manrope',sans-serif;}
   .rc-brand{display:flex; align-items:center; gap:8px; margin-bottom:28px;}
@@ -296,7 +304,9 @@ let state = {
   h2hResult: null,
   leaderboardScope: "all",
   leaderboardRowsAll: null,
-  leaderboardRowsMonth: null
+  leaderboardRowsMonth: null,
+  kitchenRatings: null,
+  expandedRating: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -510,6 +520,172 @@ function renderAchievements(t){
           </div>
         </div>`).join("")}
     </div>`;
+}
+
+const RESULTS_TABLE = [[0,4.5],[10,4.8],[20,5.2],[30,5.8],[40,6.4],[50,7.0],[60,7.8],[70,8.4],[80,9.0],[90,9.6],[100,10]];
+function interpolateTable(x, table){
+  if(x<=table[0][0]) return table[0][1];
+  if(x>=table[table.length-1][0]) return table[table.length-1][1];
+  for(let i=0;i<table.length-1;i++){
+    const [x0,y0]=table[i], [x1,y1]=table[i+1];
+    if(x>=x0 && x<=x1) return y0 + ((x-x0)/(x1-x0))*(y1-y0);
+  }
+  return table[table.length-1][1];
+}
+function resultsScore(winPct){ return interpolateTable(winPct, RESULTS_TABLE); }
+function dominanceScore(avgMargin){
+  const m = Math.max(-10, Math.min(10, avgMargin));
+  const score = m>=0 ? 7 + (m/10)*3 : 7 + (m/10)*7;
+  return Math.max(0, Math.min(10, score));
+}
+function consistencyScore(margins){
+  if(margins.length<2) return 7;
+  const mean = margins.reduce((s,x)=>s+x,0)/margins.length;
+  const variance = margins.reduce((s,x)=>s+(x-mean)*(x-mean),0)/margins.length;
+  const stdDev = Math.sqrt(variance);
+  return Math.max(0, Math.min(10, 10 - stdDev*0.6));
+}
+function clutchScore(records){
+  const close = records.filter(r=>Math.abs(r.scoreFor-r.scoreAgainst)<=2);
+  if(!close.length) return 7;
+  const wins = close.filter(r=>r.won).length;
+  return (wins/close.length)*10;
+}
+function ratingLabel(v){
+  if(v>=9.5) return "Legendary";
+  if(v>=9.0) return "Outstanding";
+  if(v>=8.5) return "Excellent";
+  if(v>=8.0) return "Very Good";
+  if(v>=7.5) return "Good";
+  if(v>=7.0) return "Solid";
+  if(v>=6.5) return "Average";
+  if(v>=6.0) return "Below Average";
+  if(v>=5.5) return "Poor";
+  return "Night to Forget";
+}
+async function getPlayerCareerProxy(name, excludeCode){
+  const codes = await getPlayerIndex(name);
+  let played=0, won=0, pf=0, pa=0;
+  for(const code of codes.slice(0,15)){
+    if(code===excludeCode) continue;
+    const t = await loadTournamentByCode(code);
+    if(!t) continue;
+    const recs = extractPlayerMatchRecords(t, name);
+    played += recs.length; won += recs.filter(r=>r.won).length;
+    pf += recs.reduce((s,r)=>s+r.scoreFor,0); pa += recs.reduce((s,r)=>s+r.scoreAgainst,0);
+  }
+  if(played<3) return null;
+  const winRate = won/played;
+  const netPerGame = (pf-pa)/played;
+  const proxy = 3.5 + (winRate-0.5)*3 + netPerGame*0.05;
+  return Math.max(2.0, Math.min(6.0, proxy));
+}
+async function resolvePlayerStrength(name, t, cache){
+  if(cache[name]) return cache[name];
+  const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
+  let value, source;
+  if(dbEntry && dbEntry.dupr){ value = dbEntry.dupr; source = "dupr"; }
+  else {
+    const proxy = await getPlayerCareerProxy(name, t.code);
+    if(proxy!=null){ value = proxy; source = "history"; }
+    else { value = 3.5; source = "neutral"; }
+  }
+  cache[name] = {value, source};
+  return cache[name];
+}
+async function computeOppositionScore(name, records, t, cache){
+  const own = await resolvePlayerStrength(name, t, cache);
+  const sourcesUsed = new Set([own.source]);
+  let total = 0;
+  for(const r of records){
+    const oppStrengths = [];
+    for(const opp of r.opponents){
+      const s = await resolvePlayerStrength(opp, t, cache);
+      oppStrengths.push(s.value);
+      sourcesUsed.add(s.source);
+    }
+    const avgOppStrength = oppStrengths.reduce((a,b)=>a+b,0)/oppStrengths.length;
+    const diff = avgOppStrength - own.value;
+    total += r.won ? (7 + diff*2) : (7 + diff*1);
+  }
+  const score = Math.max(0, Math.min(10, total/records.length));
+  let tag;
+  if(sourcesUsed.has("dupr")) tag = "Based on DUPR";
+  else if(sourcesUsed.has("history")) tag = "Estimated from history";
+  else tag = "New players \u2014 limited data";
+  return { score, tag };
+}
+async function computeKitchenRating(t, name, cache){
+  const records = extractPlayerMatchRecords(t, name);
+  if(records.length<3) return null;
+  const wins = records.filter(r=>r.won).length;
+  const winPct = (wins/records.length)*100;
+  const margins = records.map(r=>r.scoreFor-r.scoreAgainst);
+  const avgMargin = margins.reduce((a,b)=>a+b,0)/margins.length;
+  const results = resultsScore(winPct);
+  const dominance = dominanceScore(avgMargin);
+  const consistency = consistencyScore(margins);
+  const clutch = clutchScore(records);
+  const { score: opposition, tag: oppositionTag } = await computeOppositionScore(name, records, t, cache);
+  const overall = 0.40*results + 0.25*dominance + 0.15*opposition + 0.10*consistency + 0.10*clutch;
+  return {
+    overall: Math.round(overall*10)/10,
+    results: Math.round(results*10)/10,
+    dominance: Math.round(dominance*10)/10,
+    opposition: Math.round(opposition*10)/10,
+    consistency: Math.round(consistency*10)/10,
+    clutch: Math.round(clutch*10)/10,
+    oppositionTag,
+    label: ratingLabel(overall)
+  };
+}
+function renderKitchenRatings(t){
+  const ratings = state.kitchenRatings;
+  if(!ratings){
+    return `
+      <div class="card">
+        <p class="eyebrow">Kitchen Rating</p>
+        <p class="sub" style="margin-top:0;">A 0-10 score for how each player performed tonight \u2014 based on results, dominance, opponent strength, consistency, and clutch play. Needs at least 3 scored games per player.</p>
+        <button class="btn btn-ink" data-action="compute-ratings">Show Kitchen Ratings</button>
+      </div>`;
+  }
+  const entries = Object.entries(ratings).sort((a,b)=>b[1].overall-a[1].overall);
+  if(!entries.length){
+    return `<div class="card"><p class="eyebrow">Kitchen Rating</p><p class="help">Not enough games yet \u2014 each player needs at least 3 scored games this session.</p></div>`;
+  }
+  return `
+    <div class="card">
+      <p class="eyebrow">Kitchen Rating</p>
+      <p class="sub" style="margin-top:0;">Tap a player to see the breakdown.</p>
+      ${entries.map(([name,r])=>`
+        <div class="rating-row" data-action="toggle-rating-detail" data-name="${name}">
+          <div class="rating-row-head">
+            <span class="rating-name">${name}</span>
+            <span class="rating-badge">${r.overall.toFixed(1)} <span class="rating-label">${r.label}</span></span>
+          </div>
+          ${state.expandedRating===name ? `
+            <div class="rating-detail">
+              <div class="rating-comp"><span>Results</span><span>${r.results.toFixed(1)}</span></div>
+              <div class="rating-comp"><span>Dominance</span><span>${r.dominance.toFixed(1)}</span></div>
+              <div class="rating-comp"><span>Opposition</span><span>${r.opposition.toFixed(1)} <small>(${r.oppositionTag})</small></span></div>
+              <div class="rating-comp"><span>Consistency</span><span>${r.consistency.toFixed(1)}</span></div>
+              <div class="rating-comp"><span>Clutch</span><span>${r.clutch.toFixed(1)}</span></div>
+            </div>` : ""}
+        </div>`).join("")}
+    </div>`;
+}
+async function computeAllSessionRatings(){
+  const t = state.tournament;
+  showToast("Crunching the numbers\u2026");
+  const names = allTournamentPlayerNames(t);
+  const cache = {};
+  const ratings = {};
+  for(const name of names){
+    const r = await computeKitchenRating(t, name, cache);
+    if(r) ratings[name] = r;
+  }
+  state.kitchenRatings = ratings;
+  render();
 }
 function buildOpponentMap(records, field){
   const map = {};
@@ -1226,6 +1402,7 @@ function renderView(){
     ${champion ? `<div class="champion-banner"><div class="lbl">🏆 Champion</div><div class="name">${champion.label}</div></div>` : ""}
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
     ${renderAchievements(t)}
+    ${renderKitchenRatings(t)}
     ${body}
     <div class="chip-group" style="margin-top:10px;">
       <button class="btn btn-outline btn-sm" data-action="copy-link-view">Copy shareable link</button>
@@ -1629,7 +1806,7 @@ function bindEvents(){
     else if(action==="save-score") await handleSaveScore(el.dataset.mid, el.dataset.ctx);
     else if(action==="search-profile") await openProfile(document.getElementById("profileSearchInput").value.trim());
     else if(action==="view-profile") await openProfile(el.dataset.name);
-    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; render(); startPolling(); }
+    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; render(); startPolling(); }
     else if(action==="share-whatsapp") shareWhatsapp(state.tournament);
     else if(action==="share-whatsapp-view") shareWhatsapp(state.tournament);
     else if(action==="generate-result-card") await generateResultCard();
@@ -1641,6 +1818,8 @@ function bindEvents(){
     else if(action==="go-h2h") openH2H();
     else if(action==="run-h2h") await runH2H();
     else if(action==="set-leaderboard-scope") { state.leaderboardScope = el.dataset.scope; render(); }
+    else if(action==="compute-ratings") await computeAllSessionRatings();
+    else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
     else if(action==="sort-leaderboard") setLeaderboardSort(el.dataset.key);
     else if(action==="go-admin") await openAdmin();
     else if(action==="admin-login") await adminLoginHandler();
@@ -2065,6 +2244,7 @@ async function handleJoin(inputId){
   state.loading = false;
   state.tournament = t;
   state.tCode = val;
+  state.kitchenRatings = null; state.expandedRating = null;
   render();
   if(t) startPolling();
 }
@@ -2199,7 +2379,7 @@ async function init(){
     const code = hash.replace("#code=","").toUpperCase();
     state.loading = true; state.route="view"; render();
     const t = await loadTournamentByCode(code);
-    state.loading=false; state.tournament=t; state.tCode=code;
+    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null;
     render();
     if(t) startPolling();
   } else {
