@@ -229,6 +229,7 @@
   .rc-meta{font-size:13px; color:#DCEDEA; font-weight:700; margin-bottom:22px;}
   .rc-champ-lbl{font-size:11px; font-weight:800; letter-spacing:0.16em; text-transform:uppercase; color:var(--ball); margin-bottom:6px;}
   .rc-champ-name{font-family:'Anton',sans-serif; font-size:40px; text-transform:uppercase; line-height:1.05; margin-bottom:24px;}
+  .rc-rating{font-size:14px; font-weight:800; color:var(--ball); background:rgba(0,0,0,0.18); display:inline-block; padding:8px 14px; border-radius:10px; margin-bottom:20px;}
   .rc-standings{background:rgba(251,248,240,0.1); border-radius:14px; padding:16px 20px; margin-bottom:22px;}
   .rc-standings-row{display:flex; justify-content:space-between; padding:6px 0; font-size:14px; font-weight:700; border-bottom:1px solid rgba(255,255,255,0.14);}
   .rc-standings-row:last-child{border-bottom:none;}
@@ -674,9 +675,9 @@ function renderKitchenRatings(t){
         </div>`).join("")}
     </div>`;
 }
-async function computeAllSessionRatings(){
+async function getOrComputeSessionRatings(){
+  if(state.kitchenRatings) return state.kitchenRatings;
   const t = state.tournament;
-  showToast("Crunching the numbers\u2026");
   const names = allTournamentPlayerNames(t);
   const cache = {};
   const ratings = {};
@@ -685,6 +686,11 @@ async function computeAllSessionRatings(){
     if(r) ratings[name] = r;
   }
   state.kitchenRatings = ratings;
+  return ratings;
+}
+async function computeAllSessionRatings(){
+  showToast("Crunching the numbers\u2026");
+  await getOrComputeSessionRatings();
   render();
 }
 function buildOpponentMap(records, field){
@@ -742,6 +748,8 @@ async function buildPlayerStatsBundle(name){
   const history = [];
   const courtsVisited = new Set();
   const championships = [];
+  const sessionRatings = [];
+  const ratingCache = {};
   let memberSince = null;
   for(const code of codes.slice(0,25)){
     const t = await loadTournamentByCode(code);
@@ -760,6 +768,8 @@ async function buildPlayerStatsBundle(name){
         const champNames = summary.champion.split(" & ");
         if(champNames.includes(name)) championships.push({code:t.code, location:t.location, date:t.date});
       }
+      const rating = await computeKitchenRating(t, name, ratingCache);
+      if(rating) sessionRatings.push(rating.overall);
     }
   }
   allRecords.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
@@ -772,9 +782,11 @@ async function buildPlayerStatsBundle(name){
   const maxCombinedStreak = computeStreaks(allRecords).maxWin;
   const bundleTotals = { totalGames: allRecords.length, totalWins, tournamentCount, maxCombinedStreak };
   const milestones = MILESTONE_DEFS.filter(m=>m.test(bundleTotals));
+  const avgRating = sessionRatings.length ? sessionRatings.reduce((a,b)=>a+b,0)/sessionRatings.length : null;
   return {
     singles, doubles, tournamentCount, totalMatches: allRecords.length, history,
-    courtsVisited: [...courtsVisited], championships, memberSince, milestones
+    courtsVisited: [...courtsVisited], championships, memberSince, milestones,
+    avgRating, ratedSessions: sessionRatings.length
   };
 }
 function renderLineChart(points, opts){
@@ -1091,7 +1103,7 @@ function renderHome(){
     <div class="card">
       <p class="eyebrow">Track record</p>
       <h2>Look up a player</h2>
-      <p class="sub">See their win/loss record and recent Court Codes across every session.</p>
+      <p class="sub">See their win/loss record, partners, rivals, ratings and more!</p>
       <div class="join-row">
         <input type="text" id="profileSearchInput" list="playerNamesHome" placeholder="Player name" style="text-transform:none; font-family:'Manrope',sans-serif;">
         <datalist id="playerNamesHome">${state.playerDb.map(p=>`<option value="${p.name}">`).join("")}</datalist>
@@ -1108,7 +1120,7 @@ function renderHome(){
       <h2>Court stats</h2>
       <p class="sub">Sessions and total games played at each court.</p>
       <div class="join-row">
-        <select id="locationSelectHome">${SL_LOCATIONS.filter(l=>l!=="Other").map(l=>`<option value="${l}">${l}</option>`).join("")}</select>
+        <select id="locationSelectHome"><option value="">Select a court</option>${SL_LOCATIONS.filter(l=>l!=="Other").map(l=>`<option value="${l}">${l}</option>`).join("")}</select>
         <button class="btn btn-ink" data-action="location-view-stats">View</button>
       </div>
     </div>
@@ -1122,8 +1134,7 @@ function renderHome(){
         <tr><td style="font-weight:900;color:var(--court)">3</td><td>Share the Court Code. Anyone with it watches the bracket update live and logs scores.</td></tr>
       </table>
     </div>
-    <p class="footer-note">Tournament data and the shared player list are stored so they're there next time &mdash; visible to anyone using this app with the right code, so keep codes to your playing group.</p>
-    <p style="text-align:center; margin-top:14px;"><span class="player-link" data-action="go-admin" style="font-size:11px; color:var(--muted);">Admin</span></p>
+    <p style="text-align:center; margin-top:24px;"><span class="player-link" data-action="go-admin" style="font-size:11px; color:var(--muted);">Admin</span></p>
   `;
 }
 
@@ -1424,7 +1435,7 @@ function renderProfile(){
         <div class="profile-avatar">${p.name.charAt(0).toUpperCase()}</div>
         <div>
           <h2 style="margin-bottom:0;">${p.name}</h2>
-          <p class="sub" style="margin:2px 0 0;">${p.dupr ? "DUPR "+p.dupr : "No DUPR on file"} &middot; ${p.tournamentCount} session${p.tournamentCount===1?"":"s"} &middot; ${p.totalMatches} game${p.totalMatches===1?"":"s"}</p>
+          <p class="sub" style="margin:2px 0 0;">${p.dupr ? "DUPR "+p.dupr : "No DUPR on file"} &middot; ${p.tournamentCount} session${p.tournamentCount===1?"":"s"} &middot; ${p.totalMatches} game${p.totalMatches===1?"":"s"}${p.avgRating!=null ? ` &middot; \u2b50 ${p.avgRating.toFixed(1)} avg rating` : ""}</p>
         </div>
       </div>
     </div>
@@ -1447,11 +1458,12 @@ function renderPassport(p){
     <div class="category-block" style="background:var(--ink); color:var(--kitchen); border-color:var(--ink);">
       <h3 style="color:var(--ball);">🛂 Pickleball Passport</h3>
       <p class="sub" style="color:#B9CFCB; margin-top:0;">${p.memberSince ? "Playing since "+p.memberSince : "New player"}</p>
-      <div class="stat-grid">
+      <div class="stat-grid" style="grid-template-columns:repeat(${p.avgRating!=null?5:4},1fr);">
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.courtsVisited.length}</div><div class="lbl" style="color:#B9CFCB;">Courts visited</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.tournamentCount}</div><div class="lbl" style="color:#B9CFCB;">Sessions</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--ball);">${p.championships.length}</div><div class="lbl" style="color:#B9CFCB;">Championships</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.totalMatches}</div><div class="lbl" style="color:#B9CFCB;">Career games</div></div>
+        ${p.avgRating!=null ? `<div class="stat-tile" style="background:rgba(215,230,57,0.15); border-color:var(--ball);"><div class="num" style="color:var(--ball);">${p.avgRating.toFixed(1)}</div><div class="lbl" style="color:#B9CFCB;">Avg rating</div></div>` : ""}
       </div>
       ${p.courtsVisited.length ? `<p style="font-size:12.5px; color:#DCEDEA; margin:10px 0 0;"><b style="color:var(--kitchen);">Courts:</b> ${p.courtsVisited.join(", ")}</p>` : ""}
       ${p.milestones.length ? `
@@ -1813,7 +1825,7 @@ function bindEvents(){
     else if(action==="add-crossover-final") await addCrossoverFinal();
     else if(action==="add-more-games") await addMoreGames();
     else if(action==="view-location") await openLocation(el.dataset.name);
-    else if(action==="location-view-stats") await openLocation(document.getElementById("locationSelectHome").value);
+    else if(action==="location-view-stats") { const loc = document.getElementById("locationSelectHome").value; if(!loc){ showToast("Pick a court first"); return; } await openLocation(loc); }
     else if(action==="go-leaderboard") await openLeaderboard();
     else if(action==="go-h2h") openH2H();
     else if(action==="run-h2h") await runH2H();
@@ -1878,6 +1890,10 @@ async function generateResultCard(){
   const summary = computeCardSummary(t);
   showToast("Building your result card…");
 
+  const ratings = await getOrComputeSessionRatings();
+  const ratingEntries = Object.entries(ratings);
+  const topRating = ratingEntries.length ? ratingEntries.sort((a,b)=>b[1].overall-a[1].overall)[0] : null;
+
   const wrap = document.createElement("div");
   wrap.className = "result-card-wrap";
   wrap.innerHTML = `
@@ -1889,6 +1905,7 @@ async function generateResultCard(){
         <div class="rc-champ-lbl">🏆 ${summary.statusLabel}</div>
         <div class="rc-champ-name">${summary.champion}</div>
       ` : `<div class="rc-champ-lbl">${summary.statusLabel}</div><div class="rc-champ-name" style="font-size:26px;">Still in play</div>`}
+      ${topRating ? `<div class="rc-rating">⭐ MVP Rating &mdash; ${topRating[0]}: ${topRating[1].overall.toFixed(1)} (${topRating[1].label})</div>` : ""}
       ${summary.standingsList.length ? `
       <div class="rc-standings">
         ${summary.standingsList.map(s=>`<div class="rc-standings-row"><span>${s.label}</span><span>${s.rec}</span></div>`).join("")}
