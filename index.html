@@ -103,7 +103,7 @@
 
   label{display:block; font-weight:700; font-size:12.5px; text-transform:uppercase; letter-spacing:0.04em; margin:0 0 6px; color:var(--ink);}
   .field{margin-bottom:16px;}
-  input[type=text], input[type=number], input[type=date], select, textarea{
+  input[type=text], input[type=number], input[type=date], input[type=password], select, textarea{
     width:100%; padding:11px 13px; border-radius:10px; border:2px solid var(--line);
     background:#fff; font-family:'Manrope',sans-serif; font-size:14px; color:var(--ink);
   }
@@ -290,7 +290,9 @@ let state = {
   locationName: null,
   locationStats: null,
   leaderboardRows: null,
-  leaderboardSort: { key: "wins", dir: "desc" }
+  leaderboardSort: { key: "wins", dir: "desc" },
+  adminUser: null,
+  adminSessions: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -779,6 +781,7 @@ function render(){
   else if(state.route==="profile") view.innerHTML = renderProfile();
   else if(state.route==="location") view.innerHTML = renderLocation();
   else if(state.route==="leaderboard") view.innerHTML = renderLeaderboard();
+  else if(state.route==="admin") view.innerHTML = renderAdmin();
   bindEvents();
 }
 
@@ -845,6 +848,7 @@ function renderHome(){
       </table>
     </div>
     <p class="footer-note">Tournament data and the shared player list are stored so they're there next time &mdash; visible to anyone using this app with the right code, so keep codes to your playing group.</p>
+    <p style="text-align:center; margin-top:14px;"><span class="player-link" data-action="go-admin" style="font-size:11px; color:var(--muted);">Admin</span></p>
   `;
 }
 
@@ -1273,6 +1277,62 @@ function renderLeaderboard(){
   `;
 }
 
+function renderAdmin(){
+  if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading…</div>`;
+  if(!state.adminUser) return renderAdminLogin();
+  return renderAdminDashboard();
+}
+function renderAdminLogin(){
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">Admin</p>
+      <h2>Sign in</h2>
+      <p class="sub">Manage sessions and clean up test or accidental data.</p>
+      <div class="field"><label>Email</label><input type="text" id="admin-email" placeholder="you@example.com"></div>
+      <div class="field"><label>Password</label><input type="password" id="admin-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"></div>
+      <button class="btn btn-ink btn-wide" data-action="admin-login">Sign in</button>
+    </div>
+  `;
+}
+function renderAdminDashboard(){
+  const sessions = state.adminSessions;
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <p class="eyebrow">Admin</p>
+          <h2 style="margin-bottom:0;">Dashboard</h2>
+          <p class="sub" style="margin-top:2px;">${state.adminUser.email}</p>
+        </div>
+        <button class="btn btn-outline btn-sm" data-action="admin-logout">Sign out</button>
+      </div>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Clean up shared player list</p>
+      <div class="join-row">
+        <input type="text" id="admin-remove-player" list="playerNamesHome" placeholder="Player name to remove" style="text-transform:none; font-family:'Manrope',sans-serif;">
+        <datalist id="playerNamesHome">${state.playerDb.map(p=>`<option value="${p.name}">`).join("")}</datalist>
+        <button class="btn btn-outline" data-action="admin-remove-player">Remove</button>
+      </div>
+      <p class="help">Removes them from the autocomplete list. Their existing match history stays intact.</p>
+    </div>
+    <div class="card">
+      <p class="eyebrow">All sessions (${sessions?sessions.length:0})</p>
+      ${!sessions || !sessions.length ? `<p class="help">No sessions found.</p>` : sessions.map(s=>`
+        <div class="match-card">
+          <div style="flex:2; min-width:180px;">
+            <div style="font-weight:800;">${s.location}</div>
+            <div class="help" style="margin:2px 0 0;">${s.date} &middot; ${s.format} &middot; ${s.matchType} &middot; ${s.code}</div>
+          </div>
+          <button class="btn btn-outline btn-sm" data-action="view-profile-code" data-code="${s.code}">View</button>
+          <button class="remove-btn" data-action="admin-delete-session" data-key="${s.key}">Delete</button>
+        </div>`).join("")}
+    </div>
+  `;
+}
+
 function renderCrossoverSection(t, standings){
   if(standings.length<4) return "";
   if(t.crossoverFinal){
@@ -1390,6 +1450,11 @@ function bindEvents(){
     else if(action==="location-view-stats") await openLocation(document.getElementById("locationSelectHome").value);
     else if(action==="go-leaderboard") await openLeaderboard();
     else if(action==="sort-leaderboard") setLeaderboardSort(el.dataset.key);
+    else if(action==="go-admin") await openAdmin();
+    else if(action==="admin-login") await adminLoginHandler();
+    else if(action==="admin-logout") await adminLogoutHandler();
+    else if(action==="admin-delete-session") await adminDeleteSession(el.dataset.key);
+    else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
   };
 }
 
@@ -1571,6 +1636,91 @@ function setLeaderboardSort(key){
   const s = state.leaderboardSort;
   if(s.key===key) s.dir = s.dir==="desc" ? "asc" : "desc";
   else { s.key = key; s.dir = "desc"; }
+  render();
+}
+
+async function checkAdminSession(){
+  try{
+    const { data } = await sbClient.auth.getSession();
+    state.adminUser = data && data.session ? data.session.user : null;
+  }catch(e){ state.adminUser = null; }
+}
+async function openAdmin(){
+  stopPolling();
+  state.route = "admin";
+  if(state.adminUser){
+    await loadAdminSessions();
+  } else {
+    render();
+  }
+}
+async function adminLoginHandler(){
+  const email = document.getElementById("admin-email").value.trim();
+  const password = document.getElementById("admin-password").value;
+  if(!email || !password){ showToast("Enter email and password"); return; }
+  state.loading = true; render();
+  try{
+    const { data, error } = await sbClient.auth.signInWithPassword({ email, password });
+    if(error){ state.loading=false; render(); showToast("Login failed: "+error.message); return; }
+    state.adminUser = data.user;
+    await loadAdminSessions();
+  }catch(e){
+    state.loading = false; render();
+    showToast("Login failed");
+  }
+}
+async function adminLogoutHandler(){
+  try{ await sbClient.auth.signOut(); }catch(e){}
+  state.adminUser = null;
+  state.adminSessions = null;
+  render();
+}
+async function loadAdminSessions(){
+  state.loading = true; render();
+  try{
+    const { data, error } = await sbClient.from("kv_store").select("key,value,updated_at").like("key","tourney-%").order("updated_at",{ascending:false}).limit(200);
+    if(error){ throw error; }
+    state.adminSessions = (data||[]).map(row=>{
+      let t=null; try{ t = JSON.parse(row.value); }catch(e){}
+      return {
+        key: row.key, updatedAt: row.updated_at,
+        code: t ? t.code : row.key.replace("tourney-",""),
+        location: t ? t.location : "(unreadable)",
+        date: t ? t.date : "?",
+        format: t ? formatLabel(t) : "?",
+        matchType: t ? (t.matchType==="doubles"?"Doubles":t.matchType==="mixer"?"Doubles (rotating)":"Singles") : "?"
+      };
+    });
+  }catch(e){
+    console.error("loadAdminSessions failed", e);
+    state.adminSessions = [];
+    showToast("Couldn't load sessions");
+  }
+  state.loading = false;
+  render();
+}
+async function adminDeleteSession(key){
+  if(!confirm("Delete this session permanently? This can't be undone.")) return;
+  try{
+    const { error } = await sbClient.from("kv_store").delete().eq("key", key);
+    if(error){ showToast("Delete failed: "+error.message); return; }
+    showToast("Session deleted");
+    await loadAdminSessions();
+  }catch(e){
+    showToast("Delete failed");
+  }
+}
+async function adminRemovePlayer(name){
+  if(!name){ showToast("Enter a player name"); return; }
+  if(!confirm(`Remove "${name}" from the shared player list? Their match history stays intact.`)) return;
+  const raw = await storeGet(PLAYER_DB_KEY, true);
+  let db = []; try{ db = raw ? JSON.parse(raw) : []; }catch(e){ db = []; }
+  const before = db.length;
+  db = db.filter(p=>p.name.toLowerCase()!==name.toLowerCase());
+  if(db.length===before){ showToast("Name not found in the shared list"); return; }
+  await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
+  state.playerDb = db;
+  showToast(`Removed ${name} from the shared player list`);
   render();
 }
 
@@ -1794,6 +1944,7 @@ function startPolling(){
 /* ============================= INIT ============================= */
 async function init(){
   state.playerDb = await loadPlayerDb();
+  await checkAdminSession();
   const hash = location.hash;
   if(hash.startsWith("#code=")){
     const code = hash.replace("#code=","").toUpperCase();
