@@ -18,7 +18,7 @@
     --ball-dark:#B9C920;
     --line:#E4DFCB;
     --red:#C1502E;
-    --muted:#5B7A76; 
+    --muted:#5B7A76;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
@@ -519,6 +519,36 @@ function propagateBracket(rounds){
     });
   }
 }
+function fillRoundRobinToTarget(participants, targetGames){
+  if(participants.length<2) return generateRoundRobin(participants);
+  let matches = generateRoundRobin(participants);
+  let realCount = matches.filter(m=>!m.isBye).length;
+  let cycle = 1;
+  while(realCount < targetGames && cycle < 10){
+    const maxRound = matches.length ? Math.max(...matches.map(m=>m.round)) : 0;
+    const extra = generateRoundRobin(participants);
+    extra.forEach(m=>{ m.round += maxRound; m.id = m.id+"-c"+cycle; });
+    matches = matches.concat(extra);
+    realCount = matches.filter(m=>!m.isBye).length;
+    cycle++;
+  }
+  return matches;
+}
+function fillMixerToTarget(players, targetGames){
+  if(players.length<4) return generateMixerRounds(players);
+  let rounds = generateMixerRounds(players);
+  let realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
+  let cycle = 1;
+  while(realCount < targetGames && cycle < 10){
+    const maxRound = rounds.length ? Math.max(...rounds.map(r=>r.round)) : 0;
+    const extra = generateMixerRounds(players);
+    extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-c"+cycle; }); });
+    rounds = rounds.concat(extra);
+    realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
+    cycle++;
+  }
+  return rounds;
+}
 function recommendedMaxMatches(duration, gameLen, courts){
   return Math.max(1, Math.floor(duration/gameLen) * courts);
 }
@@ -735,8 +765,8 @@ function renderCreate(){
             </div>`).join("")}
       </div>
       ${f.matchType==="doubles" && f.players.length>0 ? `<p class="help">${f.players.length % 2 !== 0 ? "Odd number of players — add one more for even doubles teams." : nParticipants+" teams once paired."}</p>` :
-        f.matchType==="mixer" && f.players.length>0 ? `<p class="help">${f.players.length} players &middot; partners rotate over ${Math.max(1, f.players.length - (f.players.length%2===0?1:0))} rounds, ~${Math.floor(f.players.length/4)} games per round.</p>` :
-        (f.players.length>1 ? `<p class="help">${roundRobinTotal} round-robin match${roundRobinTotal===1?"":"es"} among ${f.players.length} players.</p>` : "")}
+        f.matchType==="mixer" && f.players.length>0 ? `<p class="help">${f.players.length} players &middot; ~${Math.floor(f.players.length/4)} game${Math.floor(f.players.length/4)===1?"":"s"} per rotation &mdash; rotations repeat automatically to fill your time window (${rec} match slots).</p>` :
+        (f.players.length>1 ? `<p class="help">${roundRobinTotal} match${roundRobinTotal===1?"":"es"} per full cycle among ${f.players.length} players &mdash; repeats automatically to fill your time window (${rec} match slots).</p>` : "")}
       ${f.players.length>=3 ? (
         f.playersConfirmed
           ? `<p class="help" style="color:var(--court);">&#10003; Players confirmed.</p>`
@@ -756,24 +786,33 @@ function renderPairingSection(){
   const f = state.form;
   const paired = new Set(f.teams.flat());
   const unpaired = f.players.filter(p=>!paired.has(p.name));
+  const selecting = f.pairSelection!==null;
   return `
     <div class="card">
       <p class="eyebrow">Step 3</p>
       <h2>Pair up teams</h2>
-      <p class="sub">Tap two players to link them as a team, or auto-pair.</p>
-      <div class="chip-group" style="margin-bottom:14px;">
-        <button class="btn btn-outline btn-sm" data-action="autopair-balanced">Auto-pair (balanced by DUPR)</button>
-        <button class="btn btn-outline btn-sm" data-action="autopair-random">Auto-pair (random)</button>
-        <button class="btn btn-outline btn-sm" data-action="clear-pairs">Clear teams</button>
-      </div>
-      <div class="chip-group" style="margin-bottom:16px;">
+      <p class="sub">Tap a player, then tap their partner to link them as a team.</p>
+
+      ${selecting ? `<p class="help" style="color:var(--court);">${f.pairSelection} selected &mdash; now tap their partner.</p>` : ""}
+      <div class="chip-group" style="margin-bottom:18px;">
         ${unpaired.map(p=>`<div class="pair-chip ${state.form.pairSelection===p.name?"selected":""}" data-action="pick-pair" data-name="${p.name}">${p.name}</div>`).join("") || "<span class='help'>All players paired.</span>"}
       </div>
-      ${f.teams.length ? f.teams.map((t,i)=>`
-        <div class="team-row">
-          <span>${t[0]} &amp; ${t[1]}</span>
-          <button class="remove-btn" data-action="remove-team" data-idx="${i}">Undo</button>
-        </div>`).join("") : ""}
+
+      ${f.teams.length ? `
+        <p class="eyebrow" style="margin-top:4px;">Teams so far</p>
+        ${f.teams.map((t,i)=>`
+          <div class="team-row">
+            <span>${t[0]} &amp; ${t[1]}</span>
+            <button class="remove-btn" data-action="remove-team" data-idx="${i}">Undo</button>
+          </div>`).join("")}
+      ` : ""}
+
+      <p class="eyebrow" style="margin-top:18px;">Or auto-pair everyone</p>
+      <div class="chip-group">
+        <button class="btn btn-outline btn-sm" data-action="autopair-balanced">Balanced by DUPR</button>
+        <button class="btn btn-outline btn-sm" data-action="autopair-random">Random</button>
+        <button class="btn btn-outline btn-sm" data-action="clear-pairs">Clear all teams</button>
+      </div>
     </div>
   `;
 }
@@ -1335,12 +1374,16 @@ async function buildTournament(){
     participants, createdAt: Date.now()
   };
 
+  const targetGames = recommendedMaxMatches(f.duration, f.gameLen, f.courts);
+
   if(effectiveFormat==="mixer"){
-    tournament.mixerRounds = generateMixerRounds(f.players);
+    tournament.mixerRounds = fillMixerToTarget(f.players, targetGames);
   } else if(effectiveFormat==="roundrobin"){
-    tournament.matches = generateRoundRobin(participants);
+    tournament.matches = fillRoundRobinToTarget(participants, targetGames);
   } else {
     tournament.groups = makeGroups(participants, f.groupSize);
+    const perGroupTarget = Math.max(1, Math.round(targetGames / tournament.groups.length));
+    tournament.groups.forEach(g=>{ g.matches = fillRoundRobinToTarget(g.participants, perGroupTarget); });
     tournament.bracket = null;
   }
 
