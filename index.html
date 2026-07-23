@@ -280,7 +280,7 @@ let state = {
   form: {
     location: "", otherLocation: "", date: todayStr(), duration: 90, gameLen: 15, courts: 1,
     matchType: "singles", format: "roundrobin", groupSize: 4, advancePerGroup: 2,
-    players: [], teams: [], pairSelection: null, playersConfirmed: false
+    players: [], teams: [], pairSelection: null, playersConfirmed: false, crownChampion: true
   },
   joinCodeInput: "",
   tournament: null,
@@ -292,7 +292,11 @@ let state = {
   leaderboardRows: null,
   leaderboardSort: { key: "wins", dir: "desc" },
   adminUser: null,
-  adminSessions: null
+  adminSessions: null,
+  h2hResult: null,
+  leaderboardScope: "all",
+  leaderboardRowsAll: null,
+  leaderboardRowsMonth: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -398,6 +402,12 @@ function extractPlayerRecord(t, name){
   return rec;
 }
 function matchCategory(t){ return t.matchType==="singles" ? "singles" : "doubles"; }
+function allTournamentPlayerNames(t){
+  const set = new Set();
+  t.participants.forEach(p=>{ (p.players || [p.label]).forEach(n=>set.add(n)); });
+  return [...set];
+}
+function championEnabled(t){ return t.crownChampion !== false; }
 function extractPlayerMatchRecords(t, name){
   const out = [];
   let idx = 0;
@@ -437,6 +447,69 @@ function computeStreaks(records){
     }
   }
   return {current, maxWin, maxLoss};
+}
+const ACHIEVEMENT_DEFS = {
+  cleanSweep: {emoji:"🧹", title:"Clean Sweep", desc:"Won every game"},
+  onFire: {emoji:"🔥", title:"On Fire", desc:"Won 5 in a row"},
+  iceCold: {emoji:"❄️", title:"Ice Cold", desc:"Lost 5 in a row"},
+  giantKiller: {emoji:"💀", title:"Giant Killer", desc:"Beat the highest-rated player"},
+  nailBiter: {emoji:"🎯", title:"Nail Biter", desc:"Won by 2 points or less"},
+  train: {emoji:"🚂", title:"Train", desc:"Won by 10+ points"},
+  dynamicDuo: {emoji:"🤝", title:"Dynamic Duo", desc:"Best partnership today"}
+};
+function computeSessionAchievements(t){
+  const names = allTournamentPlayerNames(t);
+  const badges = {}; names.forEach(n=>badges[n]=[]);
+  const topRated = t.participants.filter(p=>p.dupr!=null).sort((a,b)=>b.dupr-a.dupr)[0];
+  const topNames = topRated ? (topRated.players || [topRated.label]) : [];
+  const perPlayerRecords = {};
+  names.forEach(name=>{
+    const recs = extractPlayerMatchRecords(t, name);
+    perPlayerRecords[name] = recs;
+    if(!recs.length) return;
+    if(recs.every(r=>r.won)) badges[name].push(ACHIEVEMENT_DEFS.cleanSweep);
+    const streaks = computeStreaks(recs);
+    if(streaks.maxWin>=5) badges[name].push(ACHIEVEMENT_DEFS.onFire);
+    if(streaks.maxLoss>=5) badges[name].push(ACHIEVEMENT_DEFS.iceCold);
+    if(topRated && !topNames.includes(name) && recs.some(r=>r.won && r.opponents.some(o=>topNames.includes(o)))) badges[name].push(ACHIEVEMENT_DEFS.giantKiller);
+    if(recs.some(r=>r.won && (r.scoreFor-r.scoreAgainst)>0 && (r.scoreFor-r.scoreAgainst)<=2)) badges[name].push(ACHIEVEMENT_DEFS.nailBiter);
+    if(recs.some(r=>r.won && (r.scoreFor-r.scoreAgainst)>=10)) badges[name].push(ACHIEVEMENT_DEFS.train);
+  });
+  const pairStats = {};
+  names.forEach(name=>{
+    perPlayerRecords[name].forEach(r=>{
+      if(!r.partner) return;
+      const key = [name, r.partner].sort().join("__");
+      if(!pairStats[key]) pairStats[key] = {players:[name,r.partner].sort(), wins:0, played:0};
+      pairStats[key].played++;
+      if(r.won) pairStats[key].wins++;
+    });
+  });
+  const eligible = Object.values(pairStats).filter(p=>p.played>=2);
+  const pool = eligible.length ? eligible : Object.values(pairStats);
+  if(pool.length){
+    const best = pool.slice().sort((a,b)=> (b.wins/b.played)-(a.wins/a.played))[0];
+    if(best && best.wins/best.played >= 0.5){
+      best.players.forEach(n=> badges[n] && badges[n].push(ACHIEVEMENT_DEFS.dynamicDuo));
+    }
+  }
+  return badges;
+}
+function renderAchievements(t){
+  const badges = computeSessionAchievements(t);
+  const entries = Object.entries(badges).filter(([n,b])=>b.length);
+  if(!entries.length) return "";
+  return `
+    <div class="card">
+      <p class="eyebrow">Session achievements</p>
+      ${entries.map(([name,list])=>`
+        <div class="history-row" style="align-items:flex-start;">
+          <div class="loc" style="padding-top:4px;">${name}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end;">
+            ${list.map(b=>`<span class="streak-badge hot" title="${b.desc}">${b.emoji} ${b.title}</span>`).join("")}
+          </div>
+        </div>`).join("")}
+    </div>`;
 }
 function buildOpponentMap(records, field){
   const map = {};
@@ -481,10 +554,19 @@ function summarizeCategory(records){
     timeSeries: buildTimeSeries(records)
   };
 }
+const MILESTONE_DEFS = [
+  {key:"games100", test:b=>b.totalGames>=100, emoji:"\ud83d\udcaf", title:"100 Games Played"},
+  {key:"wins100", test:b=>b.totalWins>=100, emoji:"\ud83c\udfc5", title:"100 Wins"},
+  {key:"sessions50", test:b=>b.tournamentCount>=50, emoji:"\ud83c\udf7d\ufe0f", title:"50 Sessions"},
+  {key:"streak10", test:b=>b.maxCombinedStreak>=10, emoji:"\ud83d\udd1f", title:"10-Game Win Streak"}
+];
 async function buildPlayerStatsBundle(name){
   const codes = await getPlayerIndex(name);
   let allRecords = [];
   const history = [];
+  const courtsVisited = new Set();
+  const championships = [];
+  let memberSince = null;
   for(const code of codes.slice(0,25)){
     const t = await loadTournamentByCode(code);
     if(!t) continue;
@@ -495,14 +577,29 @@ async function buildPlayerStatsBundle(name){
         code: t.code, location: t.location, date: t.date,
         won: recs.filter(r=>r.won).length, lost: recs.filter(r=>!r.won).length
       });
+      courtsVisited.add(t.location);
+      if(!memberSince || t.date<memberSince) memberSince = t.date;
+      const summary = computeCardSummary(t);
+      if(summary.champion){
+        const champNames = summary.champion.split(" & ");
+        if(champNames.includes(name)) championships.push({code:t.code, location:t.location, date:t.date});
+      }
     }
   }
   allRecords.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
   history.sort((a,b)=> a.date<b.date ? 1 : -1);
+  championships.sort((a,b)=> a.date<b.date ? 1 : -1);
   const singles = summarizeCategory(allRecords.filter(r=>r.category==="singles"));
   const doubles = summarizeCategory(allRecords.filter(r=>r.category==="doubles"));
   const tournamentCount = new Set(allRecords.map(r=>r.code)).size;
-  return { singles, doubles, tournamentCount, totalMatches: allRecords.length, history };
+  const totalWins = allRecords.filter(r=>r.won).length;
+  const maxCombinedStreak = computeStreaks(allRecords).maxWin;
+  const bundleTotals = { totalGames: allRecords.length, totalWins, tournamentCount, maxCombinedStreak };
+  const milestones = MILESTONE_DEFS.filter(m=>m.test(bundleTotals));
+  return {
+    singles, doubles, tournamentCount, totalMatches: allRecords.length, history,
+    courtsVisited: [...courtsVisited], championships, memberSince, milestones
+  };
 }
 function renderLineChart(points, opts){
   if(!points || points.length<2) return `<div class="empty">Not enough matches yet for a trend line.</div>`;
@@ -782,6 +879,7 @@ function render(){
   else if(state.route==="location") view.innerHTML = renderLocation();
   else if(state.route==="leaderboard") view.innerHTML = renderLeaderboard();
   else if(state.route==="admin") view.innerHTML = renderAdmin();
+  else if(state.route==="h2h") view.innerHTML = renderH2H();
   bindEvents();
 }
 
@@ -825,6 +923,7 @@ function renderHome(){
       </div>
       <div class="chip-group" style="margin-top:14px;">
         <button class="btn btn-outline btn-sm" data-action="go-leaderboard">View full leaderboard</button>
+        <button class="btn btn-outline btn-sm" data-action="go-h2h">Head-to-head</button>
       </div>
     </div>
 
@@ -929,6 +1028,13 @@ function renderCreate(){
           </select>
         </div>
       </div>` : ""}
+      <div class="field" style="margin-top:16px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:0; font-size:14px;" data-action="toggle-crown-champion">
+          <input type="checkbox" id="f-crownChampion" ${f.crownChampion?"checked":""} style="width:18px; height:18px; accent-color:var(--court);">
+          Crown a champion for this session
+        </label>
+        <p class="help">${f.matchType==="doubles"?"The best-performing team gets counted as champion":"The best-performing player gets counted as champion"} on their profile. Turn off for a purely social, no-standings session.</p>
+      </div>
     </div>
 
     <div class="card">
@@ -1055,7 +1161,7 @@ function renderView(){
     const playerNames = t.participants.map(p=>p.label);
     const standings = computeMixerStandings(playerNames, t.mixerRounds);
     const allDone = t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
-    champion = allDone && standings.length ? standings[0] : null;
+    champion = allDone && standings.length && championEnabled(t) ? standings[0] : null;
     crossoverStandings = standings;
     body += renderStandingsTable(standings);
     t.mixerRounds.forEach(r=>{
@@ -1064,7 +1170,7 @@ function renderView(){
     });
   } else if(t.format==="roundrobin"){
     const standings = computeStandings(t.participants, t.matches);
-    champion = allMatchesDone(t.matches) && standings.length ? standings[0] : null;
+    champion = allMatchesDone(t.matches) && standings.length && championEnabled(t) ? standings[0] : null;
     if(t.matchType==="singles") crossoverStandings = standings;
     body += renderStandingsTable(standings);
     body += renderMatchList(t.matches, t);
@@ -1091,7 +1197,7 @@ function renderView(){
         body += renderMatchList(round, t, "ko");
       });
       const finalRound = t.bracket[t.bracket.length-1];
-      if(finalRound && finalRound.length===1 && finalRound[0].winner && !finalRound[0].isBye){
+      if(finalRound && finalRound.length===1 && finalRound[0].winner && !finalRound[0].isBye && championEnabled(t)){
         const wId = finalRound[0].winner;
         const wObj = finalRound[0].a.id===wId ? finalRound[0].a : finalRound[0].b;
         champion = {label: wObj.label};
@@ -1119,6 +1225,7 @@ function renderView(){
     ${canAddMore ? `<button class="btn btn-outline btn-sm" data-action="add-more-games" style="margin-bottom:14px;">+ Add another round of games</button>` : ""}
     ${champion ? `<div class="champion-banner"><div class="lbl">🏆 Champion</div><div class="name">${champion.label}</div></div>` : ""}
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
+    ${renderAchievements(t)}
     ${body}
     <div class="chip-group" style="margin-top:10px;">
       <button class="btn btn-outline btn-sm" data-action="copy-link-view">Copy shareable link</button>
@@ -1144,6 +1251,7 @@ function renderProfile(){
         </div>
       </div>
     </div>
+    ${renderPassport(p)}
     ${p.singles ? renderCategoryBlock("Singles", "🎾", p.singles, false) : ""}
     ${p.doubles ? renderCategoryBlock("Doubles", "🤝", p.doubles, true) : ""}
     <div class="card">
@@ -1157,6 +1265,33 @@ function renderProfile(){
   `;
 }
 
+function renderPassport(p){
+  return `
+    <div class="category-block" style="background:var(--ink); color:var(--kitchen); border-color:var(--ink);">
+      <h3 style="color:var(--ball);">🛂 Pickleball Passport</h3>
+      <p class="sub" style="color:#B9CFCB; margin-top:0;">${p.memberSince ? "Playing since "+p.memberSince : "New player"}</p>
+      <div class="stat-grid">
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.courtsVisited.length}</div><div class="lbl" style="color:#B9CFCB;">Courts visited</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.tournamentCount}</div><div class="lbl" style="color:#B9CFCB;">Sessions</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--ball);">${p.championships.length}</div><div class="lbl" style="color:#B9CFCB;">Championships</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.totalMatches}</div><div class="lbl" style="color:#B9CFCB;">Career games</div></div>
+      </div>
+      ${p.courtsVisited.length ? `<p style="font-size:12.5px; color:#DCEDEA; margin:10px 0 0;"><b style="color:var(--kitchen);">Courts:</b> ${p.courtsVisited.join(", ")}</p>` : ""}
+      ${p.milestones.length ? `
+        <p class="eyebrow" style="color:var(--ball); margin-top:16px;">Milestones</p>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          ${p.milestones.map(m=>`<span class="streak-badge hot" style="background:rgba(215,230,57,0.15); border-color:var(--ball); color:var(--kitchen);">${m.emoji} ${m.title}</span>`).join("")}
+        </div>` : ""}
+      ${p.championships.length ? `
+        <p class="eyebrow" style="color:var(--ball); margin-top:16px;">Championship history</p>
+        ${p.championships.slice(0,6).map(c=>`
+          <div class="history-row" style="border-bottom-color:rgba(255,255,255,0.14);">
+            <div style="color:var(--kitchen);">🏆 ${c.location} &middot; ${c.date}</div>
+            <div><span class="player-link" data-action="view-profile-code" data-code="${c.code}" style="color:var(--ball);">${c.code}</span></div>
+          </div>`).join("")}` : ""}
+    </div>
+  `;
+}
 function renderCategoryBlock(title, emoji, cat, isDoubles){
   const streaks = cat.streaks;
   const currentBadge = streaks.current.count>0
@@ -1223,6 +1358,49 @@ function renderCategoryBlock(title, emoji, cat, isDoubles){
   `;
 }
 
+function renderH2H(){
+  const opts = state.playerDb.map(p=>`<option value="${p.name}">${p.name}</option>`).join("");
+  const r = state.h2hResult;
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">Rivalries</p>
+      <h2>Head-to-head</h2>
+      <p class="sub">Pick two players to see their full history against each other.</p>
+      <div class="row">
+        <div class="field">
+          <label>Player 1</label>
+          <select id="h2h-a"><option value="">Select a player</option>${opts}</select>
+        </div>
+        <div class="field">
+          <label>Player 2</label>
+          <select id="h2h-b"><option value="">Select a player</option>${opts}</select>
+        </div>
+      </div>
+      <button class="btn btn-ink btn-wide" data-action="run-h2h" ${state.loading?"disabled":""}>${state.loading?"Comparing\u2026":"Compare"}</button>
+    </div>
+    ${r ? renderH2HResult(r) : ""}
+  `;
+}
+function renderH2HResult(r){
+  if(!r.total) return `<div class="card"><p class="help">${r.nameA} and ${r.nameB} haven't played each other yet.</p></div>`;
+  return `
+    <div class="card">
+      <p class="eyebrow">${r.nameA} vs ${r.nameB}</p>
+      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+        <div class="stat-tile"><div class="num">${r.winsA}-${r.winsB}</div><div class="lbl">${r.nameA} record</div></div>
+        <div class="stat-tile"><div class="num">${r.total}</div><div class="lbl">Matches played</div></div>
+        <div class="stat-tile"><div class="num">${r.avgMargin>0?"+":""}${r.avgMargin.toFixed(1)}</div><div class="lbl">Avg margin (${r.nameA})</div></div>
+      </div>
+      <p class="eyebrow" style="margin-top:18px;">Last ${r.last5.length} meeting${r.last5.length===1?"":"s"}</p>
+      ${r.last5.map(m=>`
+        <div class="history-row">
+          <div>${m.date} &middot; ${m.location}</div>
+          <div><span class="${m.won?"rec":""}" style="${m.won?"":"color:var(--red); font-weight:800;"}">${m.won?r.nameA:r.nameB} won ${Math.max(m.scoreFor,m.scoreAgainst)}-${Math.min(m.scoreFor,m.scoreAgainst)}</span></div>
+        </div>`).join("")}
+    </div>
+  `;
+}
 function renderLocation(){
   if(state.loading) return `<div class="empty">Loading location stats…</div>`;
   const s = state.locationStats;
@@ -1231,10 +1409,13 @@ function renderLocation(){
     <button class="back-link" data-action="go-home">&larr; Back</button>
     <div class="card">
       <h2>${s.name}</h2>
-      <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);">
+      <div class="stat-grid">
         <div class="stat-tile"><div class="num">${s.sessions}</div><div class="lbl">Sessions</div></div>
         <div class="stat-tile"><div class="num">${s.games}</div><div class="lbl">Games played</div></div>
+        <div class="stat-tile"><div class="num" style="font-size:15px;">${s.mostActive ? s.mostActive.name : "\u2014"}</div><div class="lbl">Most active</div></div>
+        <div class="stat-tile"><div class="num" style="font-size:15px;">${s.courtChamp ? s.courtChamp.name : "\u2014"}</div><div class="lbl">Court champ</div></div>
       </div>
+      ${s.courtChamp ? `<p class="help">Court champ: ${s.courtChamp.name} at ${Math.round((s.courtChamp.wins/s.courtChamp.played)*100)}% win rate (${s.courtChamp.wins}-${s.courtChamp.played-s.courtChamp.wins}).</p>` : ""}
       <p class="eyebrow" style="margin-top:20px;">Recent sessions</p>
       ${s.recent.map(r=>`
         <div class="history-row">
@@ -1247,8 +1428,14 @@ function renderLocation(){
 
 function renderLeaderboard(){
   if(state.loading) return `<div class="empty">Loading leaderboard…</div>`;
-  const rows = state.leaderboardRows || [];
-  if(!rows.length) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>No results yet</h2><p class="sub">Play a session and come back &mdash; the leaderboard fills in as scores get logged.</p></div>`;
+  const scope = state.leaderboardScope || "all";
+  const rows = (scope==="month" ? state.leaderboardRowsMonth : state.leaderboardRowsAll) || [];
+  const toggle = `
+    <div class="chip-group" style="margin-bottom:14px;">
+      <div class="chip ${scope==="all"?"active":""}" data-action="set-leaderboard-scope" data-scope="all">All-time</div>
+      <div class="chip ${scope==="month"?"active":""}" data-action="set-leaderboard-scope" data-scope="month">This month</div>
+    </div>`;
+  if(!rows.length) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card">${toggle}<h2>No results yet</h2><p class="sub">${scope==="month"?"No games logged this month so far.":"Play a session and come back"} &mdash; the leaderboard fills in as scores get logged.</p></div>`;
   const s = state.leaderboardSort;
   const sorted = rows.slice().sort((a,b)=> s.dir==="desc" ? b[s.key]-a[s.key] : a[s.key]-b[s.key]);
   const cols = [
@@ -1261,6 +1448,7 @@ function renderLeaderboard(){
     <div class="card">
       <h2>Leaderboard</h2>
       <p class="sub">Tap a column to sort. Tap a name for their full profile.</p>
+      ${toggle}
       <table>
         <tr>
           <th>Player</th>
@@ -1426,6 +1614,7 @@ function bindEvents(){
     else if(action==="set-format") { state.form.format = el.dataset.val; render(); }
     else if(action==="add-player") addPlayer();
     else if(action==="confirm-players") confirmPlayers();
+    else if(action==="toggle-crown-champion") { state.form.crownChampion = !state.form.crownChampion; render(); }
     else if(action==="remove-player") { const idx=+el.dataset.idx; const removed=state.form.players[idx]; state.form.players.splice(idx,1); state.form.teams = state.form.teams.filter(t=>!t.includes(removed.name)); state.form.playersConfirmed=false; render(); }
     else if(action==="pick-pair") handlePairPick(el.dataset.name);
     else if(action==="remove-team") { state.form.teams.splice(+el.dataset.idx,1); render(); }
@@ -1449,6 +1638,9 @@ function bindEvents(){
     else if(action==="view-location") await openLocation(el.dataset.name);
     else if(action==="location-view-stats") await openLocation(document.getElementById("locationSelectHome").value);
     else if(action==="go-leaderboard") await openLeaderboard();
+    else if(action==="go-h2h") openH2H();
+    else if(action==="run-h2h") await runH2H();
+    else if(action==="set-leaderboard-scope") { state.leaderboardScope = el.dataset.scope; render(); }
     else if(action==="sort-leaderboard") setLeaderboardSort(el.dataset.key);
     else if(action==="go-admin") await openAdmin();
     else if(action==="admin-login") await adminLoginHandler();
@@ -1466,19 +1658,20 @@ function shareWhatsapp(t){
 
 function computeCardSummary(t){
   let champion = null, standingsList = [], statusLabel = "Leaderboard";
+  const crown = championEnabled(t);
   if(t.format==="mixer"){
     const standings = computeMixerStandings(t.participants.map(p=>p.label), t.mixerRounds);
     const done = t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
-    if(done && standings.length){ champion = standings[0].label; statusLabel = "Champion"; }
+    if(done && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
     standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
   } else if(t.format==="roundrobin"){
     const standings = computeStandings(t.participants, t.matches);
-    if(allMatchesDone(t.matches) && standings.length){ champion = standings[0].label; statusLabel = "Champion"; }
+    if(allMatchesDone(t.matches) && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
     standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
   } else {
     if(t.bracket){
       const finalRound = t.bracket[t.bracket.length-1];
-      if(finalRound && finalRound.length===1 && finalRound[0].winner && !finalRound[0].isBye){
+      if(finalRound && finalRound.length===1 && finalRound[0].winner && !finalRound[0].isBye && crown){
         const fm = finalRound[0];
         champion = (fm.a.id===fm.winner ? fm.a : fm.b).label;
         statusLabel = "Champion";
@@ -1493,7 +1686,7 @@ function computeCardSummary(t){
       return st.length ? {label: `${g.name}: ${st[0].label}`, rec: `${st[0].won}-${st[0].lost}`} : null;
     }).filter(Boolean);
   }
-  if(t.crossoverFinal && t.crossoverFinal.winner){
+  if(t.crossoverFinal && t.crossoverFinal.winner && crown){
     const cf = t.crossoverFinal;
     const w = cf.a.id===cf.winner ? cf.a : cf.b;
     if(!champion){ champion = w.label; statusLabel = "Crossover Final Winner"; }
@@ -1597,40 +1790,63 @@ async function openLocation(name){
   state.loading = true; state.route = "location"; state.locationName = name; render();
   const codes = await getLocationIndex(name);
   let sessions=0, games=0; const recent=[];
+  const playerTotals = {};
   for(const code of codes.slice(0,40)){
     const t = await loadTournamentByCode(code);
     if(!t) continue;
     const played = collectAllMatches(t).filter(m=>!m.isBye && m.scoreA!=null && m.scoreB!=null).length;
     sessions++; games+=played;
     recent.push({code:t.code, date:t.date, games:played, format:t.format});
+    allTournamentPlayerNames(t).forEach(name2=>{
+      const recs = extractPlayerMatchRecords(t, name2);
+      if(!recs.length) return;
+      if(!playerTotals[name2]) playerTotals[name2] = {name:name2, played:0, wins:0};
+      playerTotals[name2].played += recs.length;
+      playerTotals[name2].wins += recs.filter(r=>r.won).length;
+    });
   }
+  const playerList = Object.values(playerTotals);
+  const mostActive = playerList.length ? playerList.slice().sort((a,b)=>b.played-a.played)[0] : null;
+  const champEligible = playerList.filter(p=>p.played>=3);
+  const courtChamp = (champEligible.length ? champEligible : playerList).length
+    ? (champEligible.length?champEligible:playerList).slice().sort((a,b)=>(b.wins/b.played)-(a.wins/a.played))[0]
+    : null;
   state.loading = false;
-  state.locationStats = sessions ? {name, sessions, games, recent} : null;
+  state.locationStats = sessions ? {name, sessions, games, recent, mostActive, courtChamp} : null;
   render();
 }
 
 async function openLeaderboard(){
   stopPolling();
-  state.loading = true; state.route = "leaderboard"; render();
+  state.loading = true; state.route = "leaderboard"; state.leaderboardScope = state.leaderboardScope || "all"; render();
   const cache = {};
-  const rows = [];
+  const rowsAll = [], rowsMonth = [];
+  const nowMonth = new Date().toISOString().slice(0,7);
   for(const dbP of state.playerDb){
     const codes = await getPlayerIndex(dbP.name);
-    let played=0, won=0, lost=0, pf=0, pa=0, tCount=0;
+    let all = {played:0,won:0,lost:0,pf:0,pa:0,tCount:0};
+    let month = {played:0,won:0,lost:0,pf:0,pa:0,tCount:0};
     for(const code of codes){
       let t = cache[code];
       if(t===undefined){ t = await loadTournamentByCode(code); cache[code]=t; }
       if(!t) continue;
       const rec = extractPlayerRecord(t, dbP.name);
       if(rec.played===0) continue;
-      played+=rec.played; won+=rec.won; lost+=rec.lost; pf+=rec.pf; pa+=rec.pa; tCount++;
+      all.played+=rec.played; all.won+=rec.won; all.lost+=rec.lost; all.pf+=rec.pf; all.pa+=rec.pa; all.tCount++;
+      if(t.date && t.date.slice(0,7)===nowMonth){
+        month.played+=rec.played; month.won+=rec.won; month.lost+=rec.lost; month.pf+=rec.pf; month.pa+=rec.pa; month.tCount++;
+      }
     }
-    if(played===0) continue;
-    rows.push({name:dbP.name, sessions:tCount, games:played, wins:won, losses:lost, winRate:played?won/played:0, avgPts:played?pf/played:0});
+    if(all.played) rowsAll.push(leaderboardRow(dbP.name, all));
+    if(month.played) rowsMonth.push(leaderboardRow(dbP.name, month));
   }
   state.loading = false;
-  state.leaderboardRows = rows;
+  state.leaderboardRowsAll = rowsAll;
+  state.leaderboardRowsMonth = rowsMonth;
   render();
+}
+function leaderboardRow(name, agg){
+  return { name, sessions:agg.tCount, games:agg.played, wins:agg.won, losses:agg.lost, winRate:agg.played?agg.won/agg.played:0, avgPts:agg.played?agg.pf/agg.played:0 };
 }
 function setLeaderboardSort(key){
   const s = state.leaderboardSort;
@@ -1736,9 +1952,42 @@ async function openProfile(name){
   render();
 }
 
+function openH2H(){
+  stopPolling();
+  state.route = "h2h"; state.h2hResult = null;
+  render();
+}
+async function computeHeadToHead(nameA, nameB){
+  const codes = await getPlayerIndex(nameA);
+  let matchups = [];
+  for(const code of codes.slice(0,40)){
+    const t = await loadTournamentByCode(code);
+    if(!t) continue;
+    const recs = extractPlayerMatchRecords(t, nameA);
+    recs.filter(r=>r.opponents.includes(nameB)).forEach(r=> matchups.push({...r, code:t.code, location:t.location}));
+  }
+  matchups.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
+  const winsA = matchups.filter(r=>r.won).length;
+  const winsB = matchups.length - winsA;
+  const avgMargin = matchups.length ? matchups.reduce((s,r)=>s+(r.scoreFor-r.scoreAgainst),0)/matchups.length : 0;
+  const last5 = matchups.slice(-5).reverse();
+  return { nameA, nameB, total: matchups.length, winsA, winsB, avgMargin, last5 };
+}
+async function runH2H(){
+  const a = document.getElementById("h2h-a").value;
+  const b = document.getElementById("h2h-b").value;
+  if(!a || !b){ showToast("Pick two players"); return; }
+  if(a===b){ showToast("Pick two different players"); return; }
+  state.loading = true; render();
+  const result = await computeHeadToHead(a, b);
+  state.loading = false;
+  state.h2hResult = result;
+  render();
+}
+
 function resetForm(){
   state.form = { location:"", otherLocation:"", date:todayStr(), duration:90, gameLen:15, courts:1,
-    matchType:"singles", format:"roundrobin", groupSize:4, advancePerGroup:2, players:[], teams:[], pairSelection:null, playersConfirmed:false };
+    matchType:"singles", format:"roundrobin", groupSize:4, advancePerGroup:2, players:[], teams:[], pairSelection:null, playersConfirmed:false, crownChampion:true };
   syncFormOnce();
 }
 async function syncFormOnce(){ state.playerDb = await loadPlayerDb(); }
@@ -1853,7 +2102,7 @@ async function buildTournament(){
   const effectiveFormat = f.matchType==="mixer" ? "mixer" : f.format;
   let tournament = {
     code, location: loc, date: f.date, duration: f.duration, gameLen: f.gameLen, courts: f.courts,
-    matchType: f.matchType, format: effectiveFormat, advancePerGroup: f.advancePerGroup,
+    matchType: f.matchType, format: effectiveFormat, advancePerGroup: f.advancePerGroup, crownChampion: f.crownChampion,
     participants, createdAt: Date.now()
   };
 
