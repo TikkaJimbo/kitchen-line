@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{
     --ink:#0B2B29;
@@ -193,6 +194,38 @@
   .history-row{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); font-size:13px; font-weight:600;}
   .history-row .loc{font-weight:800;}
   .history-row .rec{color:var(--court); font-weight:800;}
+  .category-block{border:2px solid var(--ink); border-radius:16px; padding:20px; margin-bottom:20px; background:var(--kitchen);}
+  .category-block h3{font-family:'Anton',sans-serif; font-size:20px; text-transform:uppercase; margin:0 0 4px;}
+  .highlight-pair{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0;}
+  .highlight-card{background:#fff; border:2px solid var(--line); border-radius:12px; padding:12px;}
+  .highlight-card.best{border-color:var(--court);}
+  .highlight-card.rival{border-color:var(--red);}
+  .highlight-card .tag{font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.05em;}
+  .highlight-card.best .tag{color:var(--court);}
+  .highlight-card.rival .tag{color:var(--red);}
+  .highlight-card .who{font-family:'Anton',sans-serif; font-size:17px; margin:4px 0 2px;}
+  .highlight-card .rec{font-size:12px; font-weight:700; color:var(--muted);}
+  .streak-row{display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 4px;}
+  .streak-badge{background:#fff; border:2px solid var(--line); border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:800;}
+  .streak-badge.hot{border-color:var(--ball-dark); background:rgba(215,230,57,0.3);}
+  .streak-badge.cold{border-color:var(--red); background:rgba(193,80,46,0.08); color:var(--red);}
+  .chart-block{margin-top:16px;}
+  .chart-block h4{font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); font-weight:800; margin:0 0 8px;}
+  .h2h-table td, .h2h-table th{font-size:12.5px;}
+  .result-card-wrap{position:fixed; left:-9999px; top:0;}
+  .rc-card{width:640px; padding:44px; background:var(--court); background-image: radial-gradient(circle at 85% -10%, rgba(215,230,57,0.25), transparent 45%); color:var(--kitchen); font-family:'Manrope',sans-serif;}
+  .rc-brand{display:flex; align-items:center; gap:8px; margin-bottom:28px;}
+  .rc-brand .dot{width:12px; height:12px; border-radius:50%; background:var(--ball); border:2px solid var(--kitchen);}
+  .rc-brand span{font-family:'Anton',sans-serif; font-size:18px; text-transform:uppercase; letter-spacing:0.03em;}
+  .rc-loc{font-family:'Anton',sans-serif; font-size:34px; text-transform:uppercase; line-height:1.05; margin:0 0 6px;}
+  .rc-meta{font-size:13px; color:#DCEDEA; font-weight:700; margin-bottom:22px;}
+  .rc-champ-lbl{font-size:11px; font-weight:800; letter-spacing:0.16em; text-transform:uppercase; color:var(--ball); margin-bottom:6px;}
+  .rc-champ-name{font-family:'Anton',sans-serif; font-size:40px; text-transform:uppercase; line-height:1.05; margin-bottom:24px;}
+  .rc-standings{background:rgba(251,248,240,0.1); border-radius:14px; padding:16px 20px; margin-bottom:22px;}
+  .rc-standings-row{display:flex; justify-content:space-between; padding:6px 0; font-size:14px; font-weight:700; border-bottom:1px solid rgba(255,255,255,0.14);}
+  .rc-standings-row:last-child{border-bottom:none;}
+  .rc-code{font-family:'JetBrains Mono',monospace; font-weight:700; font-size:20px; letter-spacing:0.12em; background:rgba(0,0,0,0.2); display:inline-block; padding:8px 16px; border-radius:10px;}
+  .rc-footer{font-size:11px; color:#B9CFCB; margin-top:10px; font-weight:600;}
   .empty{text-align:center; padding:30px 10px; color:var(--muted); font-weight:600; font-size:13.5px;}
   .toast{
     position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
@@ -361,6 +394,144 @@ function extractPlayerRecord(t, name){
     else { rec.pf+=m.scoreB; rec.pa+=m.scoreA; if(m.winner===m.b.id){rec.won++;} else rec.lost++; }
   });
   return rec;
+}
+function matchCategory(t){ return t.matchType==="singles" ? "singles" : "doubles"; }
+function extractPlayerMatchRecords(t, name){
+  const out = [];
+  let idx = 0;
+  collectAllMatches(t).forEach(m=>{
+    idx++;
+    if(m.isBye || m.scoreA==null || m.scoreB==null || !matchInvolves(m, name)) return;
+    const onA = m.a.label===name || (m.a.players && m.a.players.includes(name));
+    const self = onA ? m.a : m.b;
+    const opp = onA ? m.b : m.a;
+    const scoreFor = onA ? m.scoreA : m.scoreB;
+    const scoreAgainst = onA ? m.scoreB : m.scoreA;
+    const won = m.winner === self.id;
+    const partner = self.players ? (self.players.find(p=>p!==name) || null) : null;
+    const opponents = opp.players ? opp.players.slice() : [opp.label];
+    out.push({
+      date: t.date, code: t.code, location: t.location, category: matchCategory(t),
+      scoreFor, scoreAgainst, won, partner, opponents, seq: idx
+    });
+  });
+  return out;
+}
+function computeStreaks(records){
+  let current = {type:null, count:0};
+  let maxWin = 0, maxLoss = 0, runWin = 0, runLoss = 0;
+  records.forEach(r=>{
+    if(r.won){ runWin++; runLoss=0; if(runWin>maxWin) maxWin=runWin; }
+    else { runLoss++; runWin=0; if(runLoss>maxLoss) maxLoss=runLoss; }
+  });
+  if(records.length){
+    const last = records[records.length-1];
+    if(last.won){
+      let c=0; for(let i=records.length-1;i>=0 && records[i].won;i--) c++;
+      current = {type:"W", count:c};
+    } else {
+      let c=0; for(let i=records.length-1;i>=0 && !records[i].won;i--) c++;
+      current = {type:"L", count:c};
+    }
+  }
+  return {current, maxWin, maxLoss};
+}
+function buildOpponentMap(records, field){
+  const map = {};
+  records.forEach(r=>{
+    const names = field==="opponents" ? r.opponents : (r.partner ? [r.partner] : []);
+    names.forEach(n=>{
+      if(!map[n]) map[n] = {name:n, wins:0, losses:0, played:0};
+      map[n].played++;
+      if(r.won) map[n].wins++; else map[n].losses++;
+    });
+  });
+  return Object.values(map).sort((a,b)=> b.played-a.played);
+}
+function buildTimeSeries(records){
+  let wins=0, netSum=0;
+  return records.map((r,i)=>{
+    wins += r.won?1:0;
+    netSum += (r.scoreFor - r.scoreAgainst);
+    return { date:r.date, x:i+1, winRate: (wins/(i+1))*100, netPerGame: netSum/(i+1) };
+  });
+}
+function summarizeCategory(records){
+  if(!records.length) return null;
+  const won = records.filter(r=>r.won).length;
+  const lost = records.length - won;
+  const pf = records.reduce((s,r)=>s+r.scoreFor,0);
+  const pa = records.reduce((s,r)=>s+r.scoreAgainst,0);
+  const streaks = computeStreaks(records);
+  const opponents = buildOpponentMap(records, "opponents");
+  const partners = buildOpponentMap(records, "partner");
+  const eligiblePartners = partners.filter(p=>p.played>=2);
+  const eligibleOpponents = opponents.filter(o=>o.played>=2);
+  const bestPartner = (eligiblePartners.length?eligiblePartners:partners).slice().sort((a,b)=> (b.wins/b.played)-(a.wins/a.played))[0] || null;
+  const biggestRival = (eligibleOpponents.length?eligibleOpponents:opponents).slice().sort((a,b)=> (b.losses/b.played)-(a.losses/a.played))[0] || null;
+  return {
+    played: records.length, won, lost, winRate: won/records.length,
+    netPerGame: (pf-pa)/records.length,
+    streaks, opponents, partners, bestPartner, biggestRival,
+    timeSeries: buildTimeSeries(records)
+  };
+}
+async function buildPlayerStatsBundle(name){
+  const codes = await getPlayerIndex(name);
+  let allRecords = [];
+  const history = [];
+  for(const code of codes.slice(0,25)){
+    const t = await loadTournamentByCode(code);
+    if(!t) continue;
+    const recs = extractPlayerMatchRecords(t, name);
+    if(recs.length){
+      allRecords = allRecords.concat(recs);
+      history.push({
+        code: t.code, location: t.location, date: t.date,
+        won: recs.filter(r=>r.won).length, lost: recs.filter(r=>!r.won).length
+      });
+    }
+  }
+  allRecords.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
+  history.sort((a,b)=> a.date<b.date ? 1 : -1);
+  const singles = summarizeCategory(allRecords.filter(r=>r.category==="singles"));
+  const doubles = summarizeCategory(allRecords.filter(r=>r.category==="doubles"));
+  const tournamentCount = new Set(allRecords.map(r=>r.code)).size;
+  return { singles, doubles, tournamentCount, totalMatches: allRecords.length, history };
+}
+function renderLineChart(points, opts){
+  if(!points || points.length<2) return `<div class="empty">Not enough matches yet for a trend line.</div>`;
+  const w = 560, h = 170, pad = 28;
+  const values = points.map(p=>p[opts.field]);
+  let yMin = opts.yMin!==undefined ? opts.yMin : Math.min(...values);
+  let yMax = opts.yMax!==undefined ? opts.yMax : Math.max(...values);
+  if(yMax===yMin){ yMax+=1; yMin-=1; }
+  const pad2 = (yMax-yMin)*0.1; yMin-=pad2; yMax+=pad2;
+  const xStep = (w-2*pad)/(points.length-1);
+  const coords = points.map((p,i)=>{
+    const x = pad + i*xStep;
+    const y = h-pad - ((p[opts.field]-yMin)/(yMax-yMin))*(h-2*pad);
+    return [x,y];
+  });
+  const pathD = coords.map((c,i)=> (i===0?"M":"L")+c[0].toFixed(1)+","+c[1].toFixed(1)).join(" ");
+  const areaD = pathD + ` L${coords[coords.length-1][0].toFixed(1)},${h-pad} L${coords[0][0].toFixed(1)},${h-pad} Z`;
+  const tickIdxs = [...new Set([0, Math.floor((points.length-1)/2), points.length-1])];
+  const ticks = tickIdxs.map(i=>`<text x="${coords[i][0].toFixed(1)}" y="${h-8}" font-size="9" fill="#5B7A76" text-anchor="middle">${points[i].date.slice(5)}</text>`).join("");
+  const dots = coords.map(c=>`<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="2.5" fill="${opts.color}"/>`).join("");
+  let zeroLine = "";
+  if(yMin<0 && yMax>0){
+    const zy = h-pad - ((0-yMin)/(yMax-yMin))*(h-2*pad);
+    zeroLine = `<line x1="${pad}" y1="${zy.toFixed(1)}" x2="${w-pad}" y2="${zy.toFixed(1)}" stroke="#5B7A76" stroke-width="1" stroke-dasharray="3,3"/>`;
+  }
+  return `
+  <svg viewBox="0 0 ${w} ${h}" style="width:100%; height:auto; display:block;">
+    <line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#E4DFCB" stroke-width="1"/>
+    ${zeroLine}
+    <path d="${areaD}" fill="${opts.color}" opacity="0.14" stroke="none"/>
+    <path d="${pathD}" fill="none" stroke="${opts.color}" stroke-width="2.5"/>
+    ${dots}
+    ${ticks}
+  </svg>`;
 }
 async function saveTournament(t){
   t.updatedAt = Date.now();
@@ -932,6 +1103,7 @@ function renderView(){
       <button class="btn btn-outline btn-sm" data-action="copy-link-view">Copy shareable link</button>
       <button class="btn btn-outline btn-sm" data-action="copy-code-view">Copy code</button>
       <button class="btn btn-outline btn-sm" data-action="share-whatsapp-view">Share on WhatsApp</button>
+      <button class="btn btn-ink btn-sm" data-action="generate-result-card">📸 Result card</button>
     </div>
   `;
 }
@@ -939,7 +1111,7 @@ function renderView(){
 function renderProfile(){
   if(state.loading) return `<div class="empty">Loading profile…</div>`;
   const p = state.profile;
-  if(!p) return `<div class="card"><h2>No record yet</h2><p class="sub">This player hasn't appeared in a saved tournament, or the name doesn't match exactly.</p></div>`;
+  if(!p) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>No record yet</h2><p class="sub">This player hasn't appeared in a saved tournament, or the name doesn't match exactly.</p></div>`;
   return `
     <button class="back-link" data-action="go-home">&larr; Back</button>
     <div class="card">
@@ -947,21 +1119,85 @@ function renderProfile(){
         <div class="profile-avatar">${p.name.charAt(0).toUpperCase()}</div>
         <div>
           <h2 style="margin-bottom:0;">${p.name}</h2>
-          <p class="sub" style="margin:2px 0 0;">${p.dupr ? "DUPR "+p.dupr : "No DUPR on file"}</p>
+          <p class="sub" style="margin:2px 0 0;">${p.dupr ? "DUPR "+p.dupr : "No DUPR on file"} &middot; ${p.tournamentCount} session${p.tournamentCount===1?"":"s"} &middot; ${p.totalMatches} game${p.totalMatches===1?"":"s"}</p>
         </div>
       </div>
-      <div class="stat-grid">
-        <div class="stat-tile"><div class="num">${p.tournaments}</div><div class="lbl">Sessions</div></div>
-        <div class="stat-tile"><div class="num">${p.won}-${p.lost}</div><div class="lbl">Win-Loss</div></div>
-        <div class="stat-tile"><div class="num">${p.played ? Math.round((p.won/p.played)*100) : 0}%</div><div class="lbl">Win rate</div></div>
-        <div class="stat-tile"><div class="num">${p.pf-p.pa>0?"+":""}${p.pf-p.pa}</div><div class="lbl">Point diff</div></div>
-      </div>
-      <p class="eyebrow" style="margin-top:20px;">Recent sessions</p>
+    </div>
+    ${p.singles ? renderCategoryBlock("Singles", "🎾", p.singles, false) : ""}
+    ${p.doubles ? renderCategoryBlock("Doubles", "🤝", p.doubles, true) : ""}
+    <div class="card">
+      <p class="eyebrow">Recent sessions</p>
       ${p.history.length ? p.history.map(h=>`
         <div class="history-row">
           <div><span class="loc">${h.location}</span> &middot; ${h.date}</div>
           <div><span class="rec">${h.won}-${h.lost}</span> &middot; <span class="player-link" data-action="view-profile-code" data-code="${h.code}">${h.code}</span></div>
         </div>`).join("") : `<p class="help">No completed matches logged yet.</p>`}
+    </div>
+  `;
+}
+
+function renderCategoryBlock(title, emoji, cat, isDoubles){
+  const streaks = cat.streaks;
+  const currentBadge = streaks.current.count>0
+    ? `<div class="streak-badge ${streaks.current.type==="W"?"hot":"cold"}">${streaks.current.type==="W"?"🔥":"❄️"} Current: ${streaks.current.count}${streaks.current.type} streak</div>`
+    : `<div class="streak-badge">No active streak</div>`;
+  return `
+    <div class="category-block">
+      <h3>${emoji} ${title}</h3>
+      <p class="sub" style="margin-top:0;">${cat.played} games played</p>
+      <div class="stat-grid">
+        <div class="stat-tile"><div class="num">${cat.won}-${cat.lost}</div><div class="lbl">Win-Loss</div></div>
+        <div class="stat-tile"><div class="num">${Math.round(cat.winRate*100)}%</div><div class="lbl">Win rate</div></div>
+        <div class="stat-tile"><div class="num">${cat.netPerGame>0?"+":""}${cat.netPerGame.toFixed(1)}</div><div class="lbl">Net pts/game</div></div>
+        <div class="stat-tile"><div class="num">${streaks.maxWin}</div><div class="lbl">Best win streak</div></div>
+      </div>
+      <div class="streak-row">
+        ${currentBadge}
+        <div class="streak-badge hot">🏆 Max win streak: ${streaks.maxWin}</div>
+        <div class="streak-badge cold">📉 Max losing streak: ${streaks.maxLoss}</div>
+      </div>
+
+      ${isDoubles && (cat.bestPartner || cat.biggestRival) ? `
+      <div class="highlight-pair">
+        ${cat.bestPartner ? `
+        <div class="highlight-card best">
+          <div class="tag">Best Partner</div>
+          <div class="who">${cat.bestPartner.name}</div>
+          <div class="rec">${cat.bestPartner.wins}-${cat.bestPartner.losses} together (${Math.round((cat.bestPartner.wins/cat.bestPartner.played)*100)}% win)</div>
+        </div>` : `<div></div>`}
+        ${cat.biggestRival ? `
+        <div class="highlight-card rival">
+          <div class="tag">Biggest Rival</div>
+          <div class="who">${cat.biggestRival.name}</div>
+          <div class="rec">${cat.biggestRival.wins}-${cat.biggestRival.losses} vs them (${Math.round((cat.biggestRival.losses/cat.biggestRival.played)*100)}% loss)</div>
+        </div>` : `<div></div>`}
+      </div>` : ""}
+
+      <p class="eyebrow" style="margin-top:18px;">Head-to-head</p>
+      ${cat.opponents.length ? `
+      <table class="h2h-table">
+        <tr><th>Opponent</th><th>W-L</th><th>Win%</th></tr>
+        ${cat.opponents.slice(0,8).map(o=>`
+          <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td></tr>`).join("")}
+      </table>` : `<p class="help">No opponent history yet.</p>`}
+
+      ${isDoubles ? `
+      <p class="eyebrow" style="margin-top:18px;">Partners</p>
+      ${cat.partners.length ? `
+      <table class="h2h-table">
+        <tr><th>Partner</th><th>W-L</th><th>Win%</th></tr>
+        ${cat.partners.slice(0,8).map(o=>`
+          <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td></tr>`).join("")}
+      </table>` : `<p class="help">No partner history yet.</p>`}` : ""}
+
+      <div class="chart-block">
+        <h4>Win rate over time</h4>
+        ${renderLineChart(cat.timeSeries, {field:"winRate", color:"#0E5C55", yMin:0, yMax:100})}
+      </div>
+      <div class="chart-block">
+        <h4>Net points/game over time</h4>
+        ${renderLineChart(cat.timeSeries, {field:"netPerGame", color:"#C1502E"})}
+      </div>
     </div>
   `;
 }
@@ -1130,6 +1366,7 @@ function bindEvents(){
     else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; render(); startPolling(); }
     else if(action==="share-whatsapp") shareWhatsapp(state.tournament);
     else if(action==="share-whatsapp-view") shareWhatsapp(state.tournament);
+    else if(action==="generate-result-card") await generateResultCard();
     else if(action==="add-crossover-final") await addCrossoverFinal();
     else if(action==="add-more-games") await addMoreGames();
     else if(action==="view-location") await openLocation(el.dataset.name);
@@ -1143,6 +1380,87 @@ function shareWhatsapp(t){
   const link = location.href.split("#")[0] + "#code=" + t.code;
   const msg = `🏓 Rec pickleball at ${t.location} on ${t.date}!\nJoin the bracket with Court Code ${t.code}:\n${link}`;
   window.open("https://wa.me/?text="+encodeURIComponent(msg), "_blank");
+}
+
+function computeCardSummary(t){
+  let champion = null, standingsList = [], statusLabel = "Leaderboard";
+  if(t.format==="mixer"){
+    const standings = computeMixerStandings(t.participants.map(p=>p.label), t.mixerRounds);
+    const done = t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
+    if(done && standings.length){ champion = standings[0].label; statusLabel = "Champion"; }
+    standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
+  } else if(t.format==="roundrobin"){
+    const standings = computeStandings(t.participants, t.matches);
+    if(allMatchesDone(t.matches) && standings.length){ champion = standings[0].label; statusLabel = "Champion"; }
+    standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
+  } else {
+    if(t.bracket){
+      const finalRound = t.bracket[t.bracket.length-1];
+      if(finalRound && finalRound.length===1 && finalRound[0].winner && !finalRound[0].isBye){
+        const fm = finalRound[0];
+        champion = (fm.a.id===fm.winner ? fm.a : fm.b).label;
+        statusLabel = "Champion";
+      } else {
+        statusLabel = "Knockout in progress";
+      }
+    } else {
+      statusLabel = "Group stage leaders";
+    }
+    standingsList = t.groups.map(g=>{
+      const st = computeStandings(g.participants, g.matches);
+      return st.length ? {label: `${g.name}: ${st[0].label}`, rec: `${st[0].won}-${st[0].lost}`} : null;
+    }).filter(Boolean);
+  }
+  if(t.crossoverFinal && t.crossoverFinal.winner){
+    const cf = t.crossoverFinal;
+    const w = cf.a.id===cf.winner ? cf.a : cf.b;
+    if(!champion){ champion = w.label; statusLabel = "Crossover Final Winner"; }
+  }
+  return { champion, standingsList, statusLabel };
+}
+
+async function generateResultCard(){
+  const t = state.tournament;
+  const summary = computeCardSummary(t);
+  showToast("Building your result card…");
+
+  const wrap = document.createElement("div");
+  wrap.className = "result-card-wrap";
+  wrap.innerHTML = `
+    <div id="rc-target" class="rc-card">
+      <div class="rc-brand"><div class="dot"></div><span>Kitchen Line</span></div>
+      <div class="rc-loc">${t.location}</div>
+      <div class="rc-meta">${t.date} &middot; ${formatLabel(t)}${t.matchType!=="singles" ? " &middot; "+(t.matchType==="mixer"?"Rotating Doubles":"Doubles") : ""}</div>
+      ${summary.champion ? `
+        <div class="rc-champ-lbl">🏆 ${summary.statusLabel}</div>
+        <div class="rc-champ-name">${summary.champion}</div>
+      ` : `<div class="rc-champ-lbl">${summary.statusLabel}</div><div class="rc-champ-name" style="font-size:26px;">Still in play</div>`}
+      ${summary.standingsList.length ? `
+      <div class="rc-standings">
+        ${summary.standingsList.map(s=>`<div class="rc-standings-row"><span>${s.label}</span><span>${s.rec}</span></div>`).join("")}
+      </div>` : ""}
+      <div class="rc-code">${t.code}</div>
+      <div class="rc-footer">Join or follow along at kitchenline &middot; Court Code ${t.code}</div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+
+  try{
+    const canvas = await html2canvas(document.getElementById("rc-target"), { scale: 2, backgroundColor: null });
+    const dataUrl = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `kitchen-line-${t.code}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    showToast("Result card downloaded!");
+  }catch(e){
+    console.error("Result card generation failed", e);
+    showToast("Couldn't generate the card — try again");
+  }finally{
+    wrap.remove();
+  }
 }
 
 async function addCrossoverFinal(){
@@ -1244,19 +1562,10 @@ async function openProfile(name){
   stopPolling();
   state.loading = true; state.route = "profile"; render();
   const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
-  const codes = await getPlayerIndex(name);
   const trueName = dbEntry ? dbEntry.name : name;
-  const agg = {played:0, won:0, lost:0, pf:0, pa:0, tournaments:0, history:[]};
-  for(const code of codes.slice(0,15)){
-    const t = await loadTournamentByCode(code);
-    if(!t) continue;
-    const rec = extractPlayerRecord(t, trueName);
-    if(rec.played===0) continue;
-    agg.played+=rec.played; agg.won+=rec.won; agg.lost+=rec.lost; agg.pf+=rec.pf; agg.pa+=rec.pa; agg.tournaments++;
-    agg.history.push({code:t.code, location:t.location, date:t.date, won:rec.won, lost:rec.lost});
-  }
+  const bundle = await buildPlayerStatsBundle(trueName);
   state.loading = false;
-  state.profile = agg.tournaments ? {name:trueName, dupr: dbEntry ? dbEntry.dupr : null, ...agg} : null;
+  state.profile = bundle.totalMatches ? {name:trueName, dupr: dbEntry ? dbEntry.dupr : null, ...bundle} : null;
   render();
 }
 
