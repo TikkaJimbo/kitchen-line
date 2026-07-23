@@ -721,6 +721,7 @@ function renderCreate(){
           <div class="chip ${f.format==="roundrobin"?"active":""}" data-action="set-format" data-val="roundrobin">Round robin (league)</div>
           <div class="chip ${f.format==="groups"?"active":""}" data-action="set-format" data-val="groups">Groups + knockout</div>
         </div>
+        ${f.format==="roundrobin" && nParticipants===2 ? `<p class="help">Just 2 ${f.matchType==="doubles"?"teams":"players"} &mdash; this becomes a <b>Match Series</b>: the same head-to-head repeats until your time runs out, tallying wins.</p>` : ""}
       </div>` : ""}
       ${f.matchType!=="mixer" && f.format==="groups" ? `
       <div class="row">
@@ -757,7 +758,7 @@ function renderCreate(){
         <button class="btn btn-ink btn-sm" data-action="add-player" style="height:44px;">Add</button>
       </div>
       <div class="player-list">
-        ${f.players.length===0 ? `<div class="empty">No players yet. Add at least 3 to build a bracket.</div>` :
+        ${f.players.length===0 ? `<div class="empty">No players yet. Add at least 2 to get started.</div>` :
           f.players.map((p,i)=>`
             <div class="player-pill">
               <div><span class="name">${p.name}</span>${p.dupr ? `<span class="dupr-tag">DUPR ${p.dupr}</span>`:""}</div>
@@ -829,7 +830,7 @@ function renderConfirm(){
     </div>
     <div class="card">
       <h2>${t.location}</h2>
-      <p class="sub">${t.date} &middot; ${t.matchType==="doubles"?"Doubles":"Singles"} &middot; ${t.format==="groups"?"Groups + Knockout":"Round Robin"}</p>
+      <p class="sub">${t.date} &middot; ${t.matchType==="doubles"?"Doubles":t.matchType==="mixer"?"Doubles (rotating)":"Singles"} &middot; ${formatLabel(t)}</p>
       <div class="chip-group">
         <button class="btn btn-ink btn-sm" data-action="copy-code">Copy code</button>
         <button class="btn btn-outline btn-sm" data-action="copy-link">Copy shareable link</button>
@@ -918,7 +919,7 @@ function renderView(){
         <div class="meta">
           <span>${t.date}</span>
           <span>${t.matchType==="doubles"?"Doubles":t.matchType==="mixer"?"Doubles (rotating)":"Singles"}</span>
-          <span>${t.format==="groups"?"Groups + Knockout":t.format==="mixer"?"Rotating Partners":"Round Robin"}</span>
+          <span>${formatLabel(t)}</span>
         </div>
       </div>
       <div class="code-pill">${t.code}</div>
@@ -1031,6 +1032,12 @@ function renderCrossoverSection(t, standings){
       Optional crossover final: <b>${top4[0].label} &amp; ${top4[3].label}</b> (#1 &amp; #4) vs <b>${top4[1].label} &amp; ${top4[2].label}</b> (#2 &amp; #3).
       <br><button class="btn btn-ink btn-sm" style="margin-top:10px;" data-action="add-crossover-final">Add crossover final</button>
     </div>`;
+}
+function formatLabel(t){
+  if(t.format==="groups") return "Groups + Knockout";
+  if(t.format==="mixer") return "Rotating Partners";
+  if(t.format==="roundrobin" && t.participants && t.participants.length===2) return "Match Series";
+  return "Round Robin";
 }
 function bracketRoundName(idx, total){
   const remaining = total - idx;
@@ -1343,13 +1350,13 @@ async function buildTournament(){
   const loc = f.location==="Other" ? (f.otherLocation.trim()||"Other") : f.location;
   if(!loc){ showToast("Pick a location"); return; }
   if(f.matchType==="doubles"){
-    if(f.players.length<6 || f.players.length%2!==0){ showToast("Need an even number of players (min 6) for doubles"); return; }
+    if(f.players.length<4 || f.players.length%2!==0){ showToast("Need an even number of players (min 4) for doubles"); return; }
     const paired = new Set(f.teams.flat());
     if(f.players.some(p=>!paired.has(p.name))){ showToast("Pair up every player before continuing"); return; }
   } else if(f.matchType==="mixer"){
     if(f.players.length<4){ showToast("Add at least 4 players for rotating-partner doubles"); return; }
   } else {
-    if(f.players.length<3){ showToast("Add at least 3 players"); return; }
+    if(f.players.length<2){ showToast("Add at least 2 players"); return; }
   }
 
   state.loading = true; render();
