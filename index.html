@@ -735,9 +735,10 @@ function buildOpponentMap(records, field){
   records.forEach(r=>{
     const names = field==="opponents" ? r.opponents : (r.partner ? [r.partner] : []);
     names.forEach(n=>{
-      if(!map[n]) map[n] = {name:n, wins:0, losses:0, played:0};
+      if(!map[n]) map[n] = {name:n, wins:0, losses:0, played:0, marginSum:0};
       map[n].played++;
       if(r.won) map[n].wins++; else map[n].losses++;
+      map[n].marginSum += (r.scoreFor - r.scoreAgainst);
     });
   });
   return Object.values(map).sort((a,b)=> b.played-a.played);
@@ -773,8 +774,10 @@ function summarizeCategory(records){
   const partners = buildOpponentMap(records, "partner");
   const eligiblePartners = partners.filter(p=>p.played>=2);
   const eligibleOpponents = opponents.filter(o=>o.played>=2);
-  const bestPartner = (eligiblePartners.length?eligiblePartners:partners).slice().sort((a,b)=> (b.wins/b.played)-(a.wins/a.played))[0] || null;
-  const biggestRival = (eligibleOpponents.length?eligibleOpponents:opponents).slice().sort((a,b)=> (b.losses/b.played)-(a.losses/a.played))[0] || null;
+  const partnerScore = p => (p.wins/p.played) + (p.marginSum/p.played)/20;
+  const rivalScore = o => (o.losses/o.played) - (o.marginSum/o.played)/20;
+  const bestPartner = (eligiblePartners.length?eligiblePartners:partners).slice().sort((a,b)=> partnerScore(b)-partnerScore(a))[0] || null;
+  const biggestRival = (eligibleOpponents.length?eligibleOpponents:opponents).slice().sort((a,b)=> rivalScore(b)-rivalScore(a))[0] || null;
   return {
     played: records.length, won, lost, winRate: won/records.length,
     netPerGame: (pf-pa)/records.length,
@@ -836,7 +839,7 @@ async function buildPlayerStatsBundle(name){
   };
 }
 function renderLineChart(points, opts){
-  if(!points || points.length<2) return `<div class="empty">Not enough matches yet for a trend line.</div>`;
+  if(!points || points.length<2) return `<div class="empty">Play one more session to start seeing a trend line here.</div>`;
   const w = 560, h = 190, padL = 42, padR = 14, padT = 14, padB = 26;
   const fmt = opts.yFormat || (v=>Math.round(v*10)/10);
   const values = points.map(p=>p[opts.field]);
@@ -1587,13 +1590,13 @@ function renderCategoryBlock(title, emoji, cat, isDoubles){
         <div class="highlight-card best">
           <div class="tag">Best Partner</div>
           <div class="who">${cat.bestPartner.name}</div>
-          <div class="rec">${cat.bestPartner.wins}-${cat.bestPartner.losses} together (${Math.round((cat.bestPartner.wins/cat.bestPartner.played)*100)}% win)</div>
+          <div class="rec">${cat.bestPartner.wins}-${cat.bestPartner.losses} together (${Math.round((cat.bestPartner.wins/cat.bestPartner.played)*100)}% win, ${(cat.bestPartner.marginSum/cat.bestPartner.played)>0?"+":""}${(cat.bestPartner.marginSum/cat.bestPartner.played).toFixed(1)} avg margin)</div>
         </div>` : `<div></div>`}
         ${cat.biggestRival ? `
         <div class="highlight-card rival">
           <div class="tag">Biggest Rival</div>
           <div class="who">${cat.biggestRival.name}</div>
-          <div class="rec">${cat.biggestRival.wins}-${cat.biggestRival.losses} vs them (${Math.round((cat.biggestRival.losses/cat.biggestRival.played)*100)}% loss)</div>
+          <div class="rec">${cat.biggestRival.wins}-${cat.biggestRival.losses} vs them (${Math.round((cat.biggestRival.losses/cat.biggestRival.played)*100)}% loss, ${(cat.biggestRival.marginSum/cat.biggestRival.played)>0?"+":""}${(cat.biggestRival.marginSum/cat.biggestRival.played).toFixed(1)} avg margin)</div>
         </div>` : `<div></div>`}
       </div>` : ""}
 
