@@ -1603,18 +1603,18 @@ function renderCategoryBlock(title, emoji, cat, isDoubles){
       <p class="eyebrow" style="margin-top:18px;">Head-to-head</p>
       ${cat.opponents.length ? `
       <div class="table-scroll"><table class="h2h-table">
-        <tr><th>Opponent</th><th>W-L</th><th>Win%</th></tr>
+        <tr><th>Opponent</th><th>W-L</th><th>Win%</th><th>Net Pts</th></tr>
         ${cat.opponents.slice(0,8).map(o=>`
-          <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td></tr>`).join("")}
+          <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td><td>${(o.marginSum/o.played)>0?"+":""}${(o.marginSum/o.played).toFixed(1)}</td></tr>`).join("")}
       </table></div>` : `<p class="help">No opponent history yet.</p>`}
 
       ${isDoubles ? `
       <p class="eyebrow" style="margin-top:18px;">Partners</p>
       ${cat.partners.length ? `
       <div class="table-scroll"><table class="h2h-table">
-        <tr><th>Partner</th><th>W-L</th><th>Win%</th></tr>
+        <tr><th>Partner</th><th>W-L</th><th>Win%</th><th>Net Pts</th></tr>
         ${cat.partners.slice(0,8).map(o=>`
-          <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td></tr>`).join("")}
+          <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td><td>${(o.marginSum/o.played)>0?"+":""}${(o.marginSum/o.played).toFixed(1)}</td></tr>`).join("")}
       </table></div>` : `<p class="help">No partner history yet.</p>`}` : ""}
 
       <div class="chart-block">
