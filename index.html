@@ -188,6 +188,8 @@
   .profile-head{display:flex; align-items:center; gap:14px; margin-bottom:6px;}
   .profile-avatar{width:52px; height:52px; border-radius:50%; background:var(--ball); border:2px solid var(--ink); display:flex; align-items:center; justify-content:center; font-family:'Anton',sans-serif; font-size:20px;}
   .stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0;}
+  .stat-grid.cols-5{grid-template-columns:repeat(5,1fr);}
+  .stat-grid.cols-3{grid-template-columns:repeat(3,1fr);}
   .stat-tile{background:#fff; border:2px solid var(--line); border-radius:12px; padding:12px; text-align:center;}
   .stat-tile .num{font-family:'Anton',sans-serif; font-size:24px;}
   .stat-tile .lbl{font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); font-weight:700;}
@@ -244,9 +246,41 @@
   .toast.show{opacity:1; transform:translateX(-50%) translateY(-6px);}
   .back-link{background:none; border:none; color:var(--court); font-weight:800; font-size:13px; cursor:pointer; padding:0; margin-bottom:14px; display:inline-flex; align-items:center; gap:5px;}
   .footer-note{text-align:center; color:var(--muted); font-size:11.5px; margin-top:30px; line-height:1.6; font-weight:600;}
+  .table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch;}
   @media(max-width:520px){
-    .hero h1{font-size:32px;}
-    .code-box .code{font-size:32px; letter-spacing:0.08em;}
+    body{font-size:15px;}
+    #app{padding:0 12px 70px;}
+    .hero{padding:28px 20px 24px;}
+    .hero h1{font-size:28px;}
+    .hero p{font-size:13.5px;}
+    .card{padding:18px;}
+    .code-box{padding:22px;}
+    .code-box .code{font-size:30px; letter-spacing:0.06em;}
+    .stat-grid{grid-template-columns:repeat(2,1fr) !important; gap:8px;}
+    .stat-tile{padding:10px 8px;}
+    .stat-tile .num{font-size:19px;}
+    .highlight-pair{grid-template-columns:1fr;}
+    table{font-size:12.5px;}
+    th, td{padding:6px 5px;}
+    .row{gap:10px;}
+    .row > .field{min-width:130px;}
+    .player-add-row{flex-wrap:wrap;}
+    .player-add-row .field.dupr{max-width:none; flex:1 1 80px;}
+    .match-card{padding:10px 12px; gap:8px;}
+    .side{font-size:12.5px; min-width:72px;}
+    .score-inputs input{width:38px; padding:6px;}
+    .save-score{padding:9px 12px; font-size:11.5px;}
+    .thead{gap:8px;}
+    .thead h2.display{font-size:21px !important;}
+    .code-pill{font-size:12px; padding:5px 10px;}
+    .champion-banner .name{font-size:24px;}
+    .btn{font-size:13px; padding:11px 16px;}
+    .btn-wide{width:100%;}
+    .chip{font-size:12px; padding:8px 12px;}
+    .join-row{flex-direction:column;}
+    .join-row select, .join-row input{width:100%;}
+    .rating-detail{grid-template-columns:1fr;}
+    .profile-avatar{width:44px; height:44px; font-size:17px;}
   }
 </style>
 </head>
@@ -520,6 +554,9 @@ function renderAchievements(t){
             ${list.map(b=>`<span class="streak-badge hot" title="${b.desc}">${b.emoji} ${b.title}</span>`).join("")}
           </div>
         </div>`).join("")}
+      <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:3px;">
+        ${Object.values(ACHIEVEMENT_DEFS).map(b=>`<p class="help" style="margin:0;"><b>${b.emoji} ${b.title}</b> &mdash; ${b.desc}</p>`).join("")}
+      </div>
     </div>`;
 }
 
@@ -1011,12 +1048,12 @@ function fillRoundRobinToTarget(participants, targetGames){
 }
 function fillMixerToTarget(players, targetGames){
   if(players.length<4) return generateMixerRounds(players);
-  let rounds = generateMixerRounds(players);
+  let rounds = generateMixerRounds(shuffle(players));
   let realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
   let cycle = 1;
   while(realCount < targetGames && cycle < 10){
     const maxRound = rounds.length ? Math.max(...rounds.map(r=>r.round)) : 0;
-    const extra = generateMixerRounds(players);
+    const extra = generateMixerRounds(shuffle(players));
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-c"+cycle; }); });
     rounds = rounds.concat(extra);
     realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
@@ -1128,11 +1165,11 @@ function renderHome(){
     <div class="card">
       <p class="eyebrow">How it works</p>
       <h2>Three steps, one court code</h2>
-      <table>
+      <div class="table-scroll"><table>
         <tr><td style="width:30px;font-weight:900;color:var(--court)">1</td><td>Set the location, date, duration &amp; who's playing &mdash; DUPR optional.</td></tr>
         <tr><td style="font-weight:900;color:var(--court)">2</td><td>Kitchen Line builds a round robin or groups + knockout bracket sized to your time.</td></tr>
         <tr><td style="font-weight:900;color:var(--court)">3</td><td>Share the Court Code. Anyone with it watches the bracket update live and logs scores.</td></tr>
-      </table>
+      </table></div>
     </div>
     <p style="text-align:center; margin-top:24px;"><span class="player-link" data-action="go-admin" style="font-size:11px; color:var(--muted);">Admin</span></p>
   `;
@@ -1490,7 +1527,7 @@ function renderPassport(p){
     <div class="category-block" style="background:var(--ink); color:var(--kitchen); border-color:var(--ink);">
       <h3 style="color:var(--ball);">🛂 Pickleball Passport</h3>
       <p class="sub" style="color:#B9CFCB; margin-top:0;">${p.memberSince ? "Playing since "+p.memberSince : "New player"}</p>
-      <div class="stat-grid" style="grid-template-columns:repeat(${p.avgRating!=null?5:4},1fr);">
+      <div class="stat-grid cols-${p.avgRating!=null?5:4}">
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.courtsVisited.length}</div><div class="lbl" style="color:#B9CFCB;">Courts visited</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.tournamentCount}</div><div class="lbl" style="color:#B9CFCB;">Sessions</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--ball);">${p.championships.length}</div><div class="lbl" style="color:#B9CFCB;">Championships</div></div>
@@ -1552,20 +1589,20 @@ function renderCategoryBlock(title, emoji, cat, isDoubles){
 
       <p class="eyebrow" style="margin-top:18px;">Head-to-head</p>
       ${cat.opponents.length ? `
-      <table class="h2h-table">
+      <div class="table-scroll"><table class="h2h-table">
         <tr><th>Opponent</th><th>W-L</th><th>Win%</th></tr>
         ${cat.opponents.slice(0,8).map(o=>`
           <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td></tr>`).join("")}
-      </table>` : `<p class="help">No opponent history yet.</p>`}
+      </table></div>` : `<p class="help">No opponent history yet.</p>`}
 
       ${isDoubles ? `
       <p class="eyebrow" style="margin-top:18px;">Partners</p>
       ${cat.partners.length ? `
-      <table class="h2h-table">
+      <div class="table-scroll"><table class="h2h-table">
         <tr><th>Partner</th><th>W-L</th><th>Win%</th></tr>
         ${cat.partners.slice(0,8).map(o=>`
           <tr><td>${o.name}</td><td>${o.wins}-${o.losses}</td><td>${Math.round((o.wins/o.played)*100)}%</td></tr>`).join("")}
-      </table>` : `<p class="help">No partner history yet.</p>`}` : ""}
+      </table></div>` : `<p class="help">No partner history yet.</p>`}` : ""}
 
       <div class="chart-block">
         <h4>Win rate over time</h4>
@@ -1608,7 +1645,7 @@ function renderH2HResult(r){
   return `
     <div class="card">
       <p class="eyebrow">${r.nameA} vs ${r.nameB}</p>
-      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+      <div class="stat-grid cols-3">
         <div class="stat-tile"><div class="num">${r.winsA}-${r.winsB}</div><div class="lbl">${r.nameA} record</div></div>
         <div class="stat-tile"><div class="num">${r.total}</div><div class="lbl">Matches played</div></div>
         <div class="stat-tile"><div class="num">${r.avgMargin>0?"+":""}${r.avgMargin.toFixed(1)}</div><div class="lbl">Avg margin (${r.nameA})</div></div>
@@ -1661,7 +1698,7 @@ function renderLeaderboard(){
   const sorted = rows.slice().sort((a,b)=> s.dir==="desc" ? b[s.key]-a[s.key] : a[s.key]-b[s.key]);
   const cols = [
     {key:"sessions", label:"Sessions"}, {key:"games", label:"Games"}, {key:"wins", label:"Wins"},
-    {key:"losses", label:"Losses"}, {key:"winRate", label:"Win %"}, {key:"avgPts", label:"Avg Pts/Game"}
+    {key:"losses", label:"Losses"}, {key:"winRate", label:"Win %"}, {key:"netPts", label:"Net Pts"}
   ];
   const arrow = k => s.key===k ? (s.dir==="desc" ? " ↓" : " ↑") : "";
   return `
@@ -1670,7 +1707,7 @@ function renderLeaderboard(){
       <h2>Leaderboard</h2>
       <p class="sub">Tap a column to sort. Tap a name for their full profile.</p>
       ${toggle}
-      <table>
+      <div class="table-scroll"><table>
         <tr>
           <th>Player</th>
           ${cols.map(c=>`<th style="cursor:pointer;" data-action="sort-leaderboard" data-key="${c.key}">${c.label}${arrow(c.key)}</th>`).join("")}
@@ -1679,9 +1716,9 @@ function renderLeaderboard(){
           <tr>
             <td class="player-link" data-action="view-profile" data-name="${r.name}">${r.name}</td>
             <td>${r.sessions}</td><td>${r.games}</td><td>${r.wins}</td><td>${r.losses}</td>
-            <td>${Math.round(r.winRate*100)}%</td><td>${r.avgPts.toFixed(1)}</td>
+            <td>${Math.round(r.winRate*100)}%</td><td>${r.netPts>0?"+":""}${r.netPts.toFixed(1)}</td>
           </tr>`).join("")}
-      </table>
+      </table></div>
     </div>
   `;
 }
@@ -1778,13 +1815,13 @@ function nameLinks(label){
 function renderStandingsTable(standings, advanceCount){
   if(!standings.length) return "";
   return `
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>#</th><th>Player</th><th>W-L</th><th>+/-</th><th>Pts</th></tr>
       ${standings.map((s,i)=>`
         <tr class="${advanceCount && i<advanceCount ? "leader":""}">
           <td>${i+1}</td><td>${nameLinks(s.label)}</td><td>${s.won}-${s.lost}</td><td>${s.pf-s.pa>0?"+":""}${s.pf-s.pa}</td><td>${s.pts}</td>
         </tr>`).join("")}
-    </table>`;
+    </table></div>`;
 }
 function renderMatchList(matches, t, ctx, editable){
   if(editable===undefined) editable = true;
@@ -2083,7 +2120,7 @@ async function addMoreGames(){
   const t = state.tournament;
   if(t.format==="mixer"){
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
-    const extra = generateMixerRounds(t.participants.map(p=>({name:p.label, dupr:p.dupr})));
+    const extra = generateMixerRounds(shuffle(t.participants.map(p=>({name:p.label, dupr:p.dupr}))));
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-x"+maxRound; }); });
     t.mixerRounds = t.mixerRounds.concat(extra);
   } else if(t.format==="roundrobin"){
@@ -2169,7 +2206,7 @@ async function openLeaderboard(){
   render();
 }
 function leaderboardRow(name, agg){
-  return { name, sessions:agg.tCount, games:agg.played, wins:agg.won, losses:agg.lost, winRate:agg.played?agg.won/agg.played:0, avgPts:agg.played?agg.pf/agg.played:0 };
+  return { name, sessions:agg.tCount, games:agg.played, wins:agg.won, losses:agg.lost, winRate:agg.played?agg.won/agg.played:0, netPts:agg.played?(agg.pf-agg.pa)/agg.played:0 };
 }
 function setLeaderboardSort(key){
   const s = state.leaderboardSort;
