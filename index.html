@@ -391,7 +391,7 @@ async function getLocationIndex(location){
 }
 function collectAllMatches(t){
   let list;
-  if(t.format==="mixer") list = t.mixerRounds.flatMap(r=>r.matches);
+  if(t.format==="mixer" || (t.format==="freeplay" && t.freeplayMode==="doubles")) list = t.mixerRounds.flatMap(r=>r.matches);
   else if(t.format==="groups") list = t.groups.flatMap(g=>g.matches).concat(t.bracket ? t.bracket.flat() : []);
   else list = t.matches || [];
   if(t.crossoverFinal) list = list.concat([t.crossoverFinal]);
@@ -764,7 +764,7 @@ async function buildPlayerStatsBundle(name){
       courtsVisited.add(t.location);
       if(!memberSince || t.date<memberSince) memberSince = t.date;
       const summary = computeCardSummary(t);
-      if(summary.champion){
+      if(summary.champion && (summary.statusLabel==="Champion" || summary.statusLabel==="Crossover Final Winner")){
         const champNames = summary.champion.split(" & ");
         if(champNames.includes(name)) championships.push({code:t.code, location:t.location, date:t.date});
       }
@@ -1198,8 +1198,10 @@ function renderCreate(){
         <div class="chip-group">
           <div class="chip ${f.format==="roundrobin"?"active":""}" data-action="set-format" data-val="roundrobin">Round robin (league)</div>
           <div class="chip ${f.format==="groups"?"active":""}" data-action="set-format" data-val="groups">Groups + knockout</div>
+          <div class="chip ${f.format==="freeplay"?"active":""}" data-action="set-format" data-val="freeplay">Freeplay &mdash; pick your own matchups</div>
         </div>
         ${f.format==="roundrobin" && nParticipants===2 ? `<p class="help">Just 2 ${f.matchType==="doubles"?"teams":"players"} &mdash; this becomes a <b>Match Series</b>: the same head-to-head repeats until your time runs out, tallying wins.</p>` : ""}
+        ${f.format==="freeplay" ? `<p class="help">No schedule gets built up front. Add each match live from the session page as you play &mdash; ${f.matchType==="doubles"?"pick any 2v2 combo each time, no fixed teams needed":"pick who's playing each time"}.</p>` : ""}
       </div>` : ""}
       ${f.matchType!=="mixer" && f.format==="groups" ? `
       <div class="row">
@@ -1260,7 +1262,7 @@ function renderCreate(){
       ) : ""}
     </div>
 
-    ${f.matchType==="doubles" ? renderPairingSection() : ""}
+    ${f.matchType==="doubles" && f.format!=="freeplay" ? renderPairingSection() : ""}
 
     <button class="btn btn-ball btn-wide" data-action="build-tournament" ${state.loading ? "disabled":""}>
       ${state.loading ? "Building…" : "Generate court code & bracket"}
@@ -1342,25 +1344,51 @@ function renderView(){
 
   let body = "";
   let champion = null;
+  let championStatusLabel = "Champion";
   let crossoverStandings = null;
+  const ended = t.ended === true;
 
-  if(t.format==="mixer"){
+  if(t.format==="mixer" || (t.format==="freeplay" && t.freeplayMode==="doubles")){
     const playerNames = t.participants.map(p=>p.label);
     const standings = computeMixerStandings(playerNames, t.mixerRounds);
     const allDone = t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
-    champion = allDone && standings.length && championEnabled(t) ? standings[0] : null;
-    crossoverStandings = standings;
+    const finalized = allDone || ended;
+    if(championEnabled(t) && standings.length){
+      if(finalized){ champion = standings[0]; championStatusLabel = "Champion"; }
+      else if(t.format==="freeplay"){ champion = standings[0]; championStatusLabel = "Leading"; }
+    }
+    crossoverStandings = t.format==="mixer" ? standings : null;
     body += renderStandingsTable(standings);
-    t.mixerRounds.forEach(r=>{
-      body += `<div class="round-label">Round ${r.round}${r.sitOut.length ? " — sitting out: "+r.sitOut.join(", ") : ""}</div>`;
-      r.matches.forEach(m=> body += renderMatchCard(m, t, "mx"));
-    });
-  } else if(t.format==="roundrobin"){
+    if(t.format==="freeplay"){
+      if(!ended) body += renderFreeplayAddMatch(t);
+      if(t.mixerRounds[0].matches.length){
+        body += `<div class="round-label">Matches played</div>`;
+        t.mixerRounds[0].matches.slice().reverse().forEach(m=> body += renderMatchCard(m, t, "mx", !ended));
+      }
+    } else {
+      t.mixerRounds.forEach(r=>{
+        body += `<div class="round-label">Round ${r.round}${r.sitOut.length ? " — sitting out: "+r.sitOut.join(", ") : ""}</div>`;
+        r.matches.forEach(m=> body += renderMatchCard(m, t, "mx", !ended));
+      });
+    }
+  } else if(t.format==="roundrobin" || (t.format==="freeplay" && t.freeplayMode==="singles")){
     const standings = computeStandings(t.participants, t.matches);
-    champion = allMatchesDone(t.matches) && standings.length && championEnabled(t) ? standings[0] : null;
-    if(t.matchType==="singles") crossoverStandings = standings;
+    const finalized = (t.format==="roundrobin" && allMatchesDone(t.matches)) || ended;
+    if(championEnabled(t) && standings.length){
+      if(finalized){ champion = standings[0]; championStatusLabel = "Champion"; }
+      else if(t.format==="freeplay"){ champion = standings[0]; championStatusLabel = "Leading"; }
+    }
+    if(t.matchType==="singles" && t.format!=="freeplay") crossoverStandings = standings;
     body += renderStandingsTable(standings);
-    body += renderMatchList(t.matches, t);
+    if(t.format==="freeplay"){
+      if(!ended) body += renderFreeplayAddMatch(t);
+      if(t.matches.length){
+        body += `<div class="round-label">Matches played</div>`;
+        t.matches.slice().reverse().forEach(m=> body += renderMatchCard(m, t, "rr", !ended));
+      }
+    } else {
+      body += renderMatchList(t.matches, t, null, !ended);
+    }
   } else {
     // groups + knockout
     const allGroupMatches = t.groups.flatMap(g=>g.matches);
@@ -1369,32 +1397,34 @@ function renderView(){
       const st = computeStandings(g.participants, g.matches);
       body += `<div class="group-block"><h3>${g.name}</h3>${renderStandingsTable(st, t.advancePerGroup)}</div>`;
     });
-    body += renderMatchList(allGroupMatches, t, "grp");
+    body += renderMatchList(allGroupMatches, t, "grp", !ended);
     body += `<div class="round-label" style="margin-top:24px;">Knockout</div>`;
     if(!t.bracket){
       const groupsDone = t.groups.every(g=>allMatchesDone(g.matches));
-      if(groupsDone){
+      if(groupsDone && !ended){
         body += `<div class="empty">Group stage complete. <br><button class="btn btn-ink btn-sm" style="margin-top:10px;" data-action="start-knockout">Seed the knockout bracket</button></div>`;
-      } else {
+      } else if(!ended){
         body += `<div class="empty">Bracket unlocks once every group match has a score.</div>`;
       }
     } else {
       t.bracket.forEach((round,ri)=>{
         body += `<div class="round-label">${bracketRoundName(ri, t.bracket.length)}</div>`;
-        body += renderMatchList(round, t, "ko");
+        body += renderMatchList(round, t, "ko", !ended);
       });
       const finalRound = t.bracket[t.bracket.length-1];
       if(finalRound && finalRound.length===1 && finalRound[0].winner && !finalRound[0].isBye && championEnabled(t)){
         const wId = finalRound[0].winner;
         const wObj = finalRound[0].a.id===wId ? finalRound[0].a : finalRound[0].b;
         champion = {label: wObj.label};
+        championStatusLabel = "Champion";
       }
     }
   }
 
-  if(crossoverStandings) body += renderCrossoverSection(t, crossoverStandings);
+  if(crossoverStandings && !ended) body += renderCrossoverSection(t, crossoverStandings);
+  else if(t.crossoverFinal) body += `<div class="round-label">Crossover Final</div>${renderMatchCard(t.crossoverFinal, t, "cx", !ended)}`;
 
-  const canAddMore = t.format==="mixer" || t.format==="roundrobin" || (t.format==="groups" && !t.bracket);
+  const canAddMore = !ended && (t.format==="mixer" || t.format==="roundrobin" || (t.format==="groups" && !t.bracket));
 
   return `
     <button class="back-link" data-action="go-home">&larr; Back</button>
@@ -1405,12 +1435,13 @@ function renderView(){
           <span>${t.date}</span>
           <span>${t.matchType==="doubles"?"Doubles":t.matchType==="mixer"?"Doubles (rotating)":"Singles"}</span>
           <span>${formatLabel(t)}</span>
+          ${ended ? `<span style="color:var(--red);">&#9679; Session ended</span>` : ""}
         </div>
       </div>
       <div class="code-pill">${t.code}</div>
     </div>
     ${canAddMore ? `<button class="btn btn-outline btn-sm" data-action="add-more-games" style="margin-bottom:14px;">+ Add another round of games</button>` : ""}
-    ${champion ? `<div class="champion-banner"><div class="lbl">🏆 Champion</div><div class="name">${champion.label}</div></div>` : ""}
+    ${champion ? `<div class="champion-banner"><div class="lbl">🏆 ${championStatusLabel}</div><div class="name">${champion.label}</div></div>` : ""}
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
     ${renderAchievements(t)}
     ${renderKitchenRatings(t)}
@@ -1420,6 +1451,7 @@ function renderView(){
       <button class="btn btn-outline btn-sm" data-action="copy-code-view">Copy code</button>
       <button class="btn btn-outline btn-sm" data-action="share-whatsapp-view">Share on WhatsApp</button>
       <button class="btn btn-ink btn-sm" data-action="generate-result-card">📸 Result card</button>
+      ${!ended ? `<button class="btn btn-outline btn-sm" style="border-color:var(--red); color:var(--red);" data-action="end-session">End session</button>` : ""}
     </div>
   `;
 }
@@ -1724,6 +1756,7 @@ function renderCrossoverSection(t, standings){
     </div>`;
 }
 function formatLabel(t){
+  if(t.format==="freeplay") return t.freeplayMode==="singles" ? "Freeplay" : "Freeplay Doubles";
   if(t.format==="groups") return "Groups + Knockout";
   if(t.format==="mixer") return "Rotating Partners";
   if(t.format==="roundrobin" && t.participants && t.participants.length===2) return "Match Series";
@@ -1753,15 +1786,18 @@ function renderStandingsTable(standings, advanceCount){
         </tr>`).join("")}
     </table>`;
 }
-function renderMatchList(matches, t, ctx){
+function renderMatchList(matches, t, ctx, editable){
+  if(editable===undefined) editable = true;
   const rounds = {};
   matches.forEach(m=>{ (rounds[m.round]=rounds[m.round]||[]).push(m); });
   return Object.keys(rounds).sort((a,b)=>a-b).map(r=>`
     <div class="round-label">${ctx==="ko" ? "" : "Round "+r}</div>
-    ${rounds[r].map(m=>renderMatchCard(m, t, ctx)).join("")}
+    ${rounds[r].map(m=>renderMatchCard(m, t, ctx, editable)).join("")}
   `).join("");
 }
-function renderMatchCard(m, t, ctx){
+function renderMatchCard(m, t, ctx, editable){
+  if(editable===undefined) editable = true;
+  const removable = editable && ctx!=="ko";
   if(m.isBye){
     const real = m.a.bye ? m.b : m.a;
     return `<div class="match-card bye"><div class="side">${real.label}</div><div class="side">— Bye —</div></div>`;
@@ -1771,6 +1807,14 @@ function renderMatchCard(m, t, ctx){
   }
   const done = m.scoreA!=null && m.scoreB!=null;
   const aWin = done && m.winner===m.a.id, bWin = done && m.winner===m.b.id;
+  if(!editable){
+    return `
+      <div class="match-card ${done?"done":""}">
+        <div class="side ${aWin?"win":""}">${m.a.label}</div>
+        <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">${done?`${m.scoreA} – ${m.scoreB}`:"—"}</div>
+        <div class="side ${bWin?"win":""}" style="text-align:right;">${m.b.label}</div>
+      </div>`;
+  }
   return `
     <div class="match-card ${done?"done":""}">
       <div class="side ${aWin?"win":""}">${m.a.label}</div>
@@ -1781,7 +1825,84 @@ function renderMatchCard(m, t, ctx){
       </div>
       <div class="side ${bWin?"win":""}" style="text-align:right;">${m.b.label}</div>
       <button class="btn btn-ink btn-sm save-score" data-action="save-score" data-mid="${m.id}" data-ctx="${ctx||"rr"}">Save</button>
+      ${removable ? `<button class="remove-btn" data-action="remove-match" data-mid="${m.id}" data-ctx="${ctx||"rr"}" title="Remove this match">✕</button>` : ""}
     </div>`;
+}
+
+function renderFreeplayAddMatch(t){
+  const opts = t.participants.map(p=>`<option value="${p.label}">${p.label}</option>`).join("");
+  if(t.freeplayMode==="singles"){
+    return `
+      <div class="card">
+        <p class="eyebrow">Add a match</p>
+        <p class="sub" style="margin-top:0;">Pick who's playing, enter the score, save. No pre-set schedule.</p>
+        <div class="row">
+          <div class="field"><label>Player A</label><select id="fp-a"><option value="">Select</option>${opts}</select></div>
+          <div class="field"><label>Player B</label><select id="fp-b"><option value="">Select</option>${opts}</select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Score A</label><input type="number" id="fp-scoreA" min="0"></div>
+          <div class="field"><label>Score B</label><input type="number" id="fp-scoreB" min="0"></div>
+        </div>
+        <button class="btn btn-ink btn-wide" data-action="add-freeplay-match">Add match</button>
+      </div>`;
+  }
+  return `
+    <div class="card">
+      <p class="eyebrow">Add a match</p>
+      <p class="sub" style="margin-top:0;">Pick any 2v2 combo, enter the score, save. Partners can change every match.</p>
+      <div class="row">
+        <div class="field"><label>Team A &mdash; Player 1</label><select id="fp-a1"><option value="">Select</option>${opts}</select></div>
+        <div class="field"><label>Team A &mdash; Player 2</label><select id="fp-a2"><option value="">Select</option>${opts}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Team B &mdash; Player 1</label><select id="fp-b1"><option value="">Select</option>${opts}</select></div>
+        <div class="field"><label>Team B &mdash; Player 2</label><select id="fp-b2"><option value="">Select</option>${opts}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Score A</label><input type="number" id="fp-scoreA" min="0"></div>
+        <div class="field"><label>Score B</label><input type="number" id="fp-scoreB" min="0"></div>
+      </div>
+      <button class="btn btn-ink btn-wide" data-action="add-freeplay-match">Add match</button>
+    </div>`;
+}
+async function addFreeplayMatch(){
+  const t = state.tournament;
+  const scoreAEl = document.getElementById("fp-scoreA"), scoreBEl = document.getElementById("fp-scoreB");
+  const scoreA = scoreAEl.value===""?null:+scoreAEl.value;
+  const scoreB = scoreBEl.value===""?null:+scoreBEl.value;
+  if(scoreA==null || scoreB==null || scoreA===scoreB){ showToast("Enter two different scores"); return; }
+
+  let aObj, bObj;
+  if(t.freeplayMode==="singles"){
+    const aName = document.getElementById("fp-a").value;
+    const bName = document.getElementById("fp-b").value;
+    if(!aName || !bName || aName===bName){ showToast("Pick two different players"); return; }
+    aObj = t.participants.find(p=>p.label===aName);
+    bObj = t.participants.find(p=>p.label===bName);
+  } else {
+    const a1 = document.getElementById("fp-a1").value, a2 = document.getElementById("fp-a2").value;
+    const b1 = document.getElementById("fp-b1").value, b2 = document.getElementById("fp-b2").value;
+    const names = [a1,a2,b1,b2];
+    if(names.some(n=>!n)){ showToast("Pick all 4 players"); return; }
+    if(new Set(names).size<4){ showToast("Each player can only appear once"); return; }
+    aObj = {id:"fp-a-"+Date.now(), label:a1+" & "+a2, players:[a1,a2]};
+    bObj = {id:"fp-b-"+Date.now()+"x", label:b1+" & "+b2, players:[b1,b2]};
+  }
+
+  const winner = scoreA>scoreB ? aObj.id : bObj.id;
+
+  if(t.freeplayMode==="singles"){
+    const match = {id:"fp-"+Date.now(), round:t.matches.length+1, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false};
+    t.matches.push(match);
+  } else {
+    const match = {id:"fp-"+Date.now(), round:t.mixerRounds[0].matches.length+1, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false};
+    t.mixerRounds[0].matches.push(match);
+  }
+
+  await saveTournament(t);
+  render();
+  showToast("Match added");
 }
 
 /* ============================= EVENT BINDING ============================= */
@@ -1832,6 +1953,9 @@ function bindEvents(){
     else if(action==="set-leaderboard-scope") { state.leaderboardScope = el.dataset.scope; render(); }
     else if(action==="compute-ratings") await computeAllSessionRatings();
     else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
+    else if(action==="add-freeplay-match") await addFreeplayMatch();
+    else if(action==="remove-match") await handleRemoveMatch(el.dataset.mid, el.dataset.ctx);
+    else if(action==="end-session") await endSession();
     else if(action==="sort-leaderboard") setLeaderboardSort(el.dataset.key);
     else if(action==="go-admin") await openAdmin();
     else if(action==="admin-login") await adminLoginHandler();
@@ -1850,14 +1974,17 @@ function shareWhatsapp(t){
 function computeCardSummary(t){
   let champion = null, standingsList = [], statusLabel = "Leaderboard";
   const crown = championEnabled(t);
-  if(t.format==="mixer"){
+  const freeplayCrown = t.format==="freeplay" && crown;
+  if(t.format==="mixer" || (t.format==="freeplay" && t.freeplayMode==="doubles")){
     const standings = computeMixerStandings(t.participants.map(p=>p.label), t.mixerRounds);
-    const done = t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
-    if(done && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
+    const done = t.format==="mixer" && t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
+    if(freeplayCrown && standings.length){ champion = standings[0].label; statusLabel = "Leading"; }
+    else if(done && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
     standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
-  } else if(t.format==="roundrobin"){
+  } else if(t.format==="roundrobin" || (t.format==="freeplay" && t.freeplayMode==="singles")){
     const standings = computeStandings(t.participants, t.matches);
-    if(allMatchesDone(t.matches) && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
+    if(freeplayCrown && standings.length){ champion = standings[0].label; statusLabel = "Leading"; }
+    else if(t.format==="roundrobin" && allMatchesDone(t.matches) && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
     standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
   } else {
     if(t.bracket){
@@ -2273,8 +2400,10 @@ async function buildTournament(){
   if(!loc){ showToast("Pick a location"); return; }
   if(f.matchType==="doubles"){
     if(f.players.length<4 || f.players.length%2!==0){ showToast("Need an even number of players (min 4) for doubles"); return; }
-    const paired = new Set(f.teams.flat());
-    if(f.players.some(p=>!paired.has(p.name))){ showToast("Pair up every player before continuing"); return; }
+    if(f.format!=="freeplay"){
+      const paired = new Set(f.teams.flat());
+      if(f.players.some(p=>!paired.has(p.name))){ showToast("Pair up every player before continuing"); return; }
+    }
   } else if(f.matchType==="mixer"){
     if(f.players.length<4){ showToast("Add at least 4 players for rotating-partner doubles"); return; }
   } else {
@@ -2284,7 +2413,7 @@ async function buildTournament(){
   state.loading = true; render();
 
   let participants;
-  if(f.matchType==="doubles"){
+  if(f.matchType==="doubles" && f.format!=="freeplay"){
     participants = f.teams.map((t,i)=>{
       const p1 = f.players.find(p=>p.name===t[0]);
       const p2 = f.players.find(p=>p.name===t[1]);
@@ -2309,6 +2438,13 @@ async function buildTournament(){
     tournament.mixerRounds = fillMixerToTarget(f.players, targetGames);
   } else if(effectiveFormat==="roundrobin"){
     tournament.matches = fillRoundRobinToTarget(participants, targetGames);
+  } else if(effectiveFormat==="freeplay"){
+    tournament.freeplayMode = f.matchType==="singles" ? "singles" : "doubles";
+    if(tournament.freeplayMode==="singles"){
+      tournament.matches = [];
+    } else {
+      tournament.mixerRounds = [{round:1, matches:[], sitOut:[]}];
+    }
   } else {
     tournament.groups = makeGroups(participants, f.groupSize);
     const perGroupTarget = Math.max(1, Math.round(targetGames / tournament.groups.length));
@@ -2361,6 +2497,38 @@ async function handleSaveScore(mid, ctx){
   await saveTournament(t);
   render();
   showToast("Score saved");
+}
+async function handleRemoveMatch(mid, ctx){
+  const t = state.tournament;
+  const m = findMatch(t, mid, ctx);
+  if(!m) return;
+  const hasScore = m.scoreA!=null && m.scoreB!=null;
+  if(hasScore){
+    if(!confirm("This match already has a score — remove it and its result permanently?")) return;
+  }
+  if(ctx==="cx"){
+    t.crossoverFinal = null;
+  } else if(ctx==="grp"){
+    for(const g of t.groups){ const idx=g.matches.findIndex(x=>x.id===mid); if(idx>=0){ g.matches.splice(idx,1); break; } }
+  } else if(ctx==="mx"){
+    for(const r of t.mixerRounds){ const idx=r.matches.findIndex(x=>x.id===mid); if(idx>=0){ r.matches.splice(idx,1); break; } }
+  } else {
+    const idx = t.matches.findIndex(x=>x.id===mid);
+    if(idx>=0) t.matches.splice(idx,1);
+  }
+  await saveTournament(t);
+  render();
+  showToast("Match removed");
+}
+async function endSession(){
+  if(!confirm("End this session? This locks the bracket, finalizes standings, and stops any further score edits or new matches. You can't undo this.")) return;
+  if(!confirm("Just to be sure — end the session now?")) return;
+  const t = state.tournament;
+  t.ended = true;
+  t.endedAt = Date.now();
+  await saveTournament(t);
+  render();
+  showToast("Session ended");
 }
 function findMatch(t, mid, ctx){
   if(ctx==="cx") return t.crossoverFinal && t.crossoverFinal.id===mid ? t.crossoverFinal : null;
