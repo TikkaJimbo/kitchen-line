@@ -2024,18 +2024,20 @@ function shareWhatsapp(t){
 function computeCardSummary(t){
   let champion = null, standingsList = [], statusLabel = "Leaderboard";
   const crown = championEnabled(t);
+  const ended = t.ended === true;
   const freeplayCrown = t.format==="freeplay" && crown;
   if(t.format==="mixer" || (t.format==="freeplay" && t.freeplayMode==="doubles")){
     const standings = computeMixerStandings(t.participants.map(p=>p.label), t.mixerRounds);
-    const done = t.format==="mixer" && t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null));
-    if(freeplayCrown && standings.length){ champion = standings[0].label; statusLabel = "Leading"; }
-    else if(done && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
-    standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
+    const done = (t.format==="mixer" && t.mixerRounds.every(r=>r.matches.every(m=>m.scoreA!=null && m.scoreB!=null))) || ended;
+    if(done && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
+    else if(freeplayCrown && standings.length){ champion = standings[0].label; statusLabel = "Leading"; }
+    standingsList = standings.map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
   } else if(t.format==="roundrobin" || (t.format==="freeplay" && t.freeplayMode==="singles")){
     const standings = computeStandings(t.participants, t.matches);
-    if(freeplayCrown && standings.length){ champion = standings[0].label; statusLabel = "Leading"; }
-    else if(t.format==="roundrobin" && allMatchesDone(t.matches) && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
-    standingsList = standings.slice(0,4).map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
+    const done = (t.format==="roundrobin" && allMatchesDone(t.matches)) || ended;
+    if(done && standings.length && crown){ champion = standings[0].label; statusLabel = "Champion"; }
+    else if(freeplayCrown && standings.length){ champion = standings[0].label; statusLabel = "Leading"; }
+    standingsList = standings.map(s=>({label:s.label, rec:`${s.won}-${s.lost}`}));
   } else {
     if(t.bracket){
       const finalRound = t.bracket[t.bracket.length-1];
@@ -2043,9 +2045,13 @@ function computeCardSummary(t){
         const fm = finalRound[0];
         champion = (fm.a.id===fm.winner ? fm.a : fm.b).label;
         statusLabel = "Champion";
+      } else if(ended){
+        statusLabel = "Session ended";
       } else {
         statusLabel = "Knockout in progress";
       }
+    } else if(ended){
+      statusLabel = "Session ended";
     } else {
       statusLabel = "Group stage leaders";
     }
@@ -2081,7 +2087,7 @@ async function generateResultCard(){
       ${summary.champion ? `
         <div class="rc-champ-lbl">🏆 ${summary.statusLabel}</div>
         <div class="rc-champ-name">${summary.champion}</div>
-      ` : `<div class="rc-champ-lbl">${summary.statusLabel}</div><div class="rc-champ-name" style="font-size:26px;">Still in play</div>`}
+      ` : `<div class="rc-champ-lbl">${summary.statusLabel}</div><div class="rc-champ-name" style="font-size:26px;">${t.ended?"Session ended":"Still in play"}</div>`}
       ${topRating ? `<div class="rc-rating">⭐ MVP Rating &mdash; ${topRating[0]}: ${topRating[1].overall.toFixed(1)} (${topRating[1].label})</div>` : ""}
       ${summary.standingsList.length ? `
       <div class="rc-standings">
