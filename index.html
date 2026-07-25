@@ -1086,6 +1086,14 @@ function showToast(msg){
   clearTimeout(state.toastTimer);
   state.toastTimer=setTimeout(()=>t.classList.remove("show"), 2400);
 }
+function haptic(tier){
+  if(!navigator.vibrate) return;
+  try{
+    if(tier==="light") navigator.vibrate(12);
+    else if(tier==="medium") navigator.vibrate(25);
+    else if(tier==="strong") navigator.vibrate([20,40,20]);
+  }catch(e){}
+}
 function nav(route, extra){
   stopPolling();
   state.route=route;
@@ -1994,6 +2002,7 @@ async function addFreeplayMatch(){
   }
 
   await saveTournament(t);
+  haptic("light");
   render();
   showToast("Match added");
 }
@@ -2177,6 +2186,7 @@ async function addCrossoverFinal(){
     scoreA:null, scoreB:null, winner:null, isBye:false
   };
   await saveTournament(t);
+  haptic("medium");
   render();
   showToast("Crossover final added");
 }
@@ -2205,6 +2215,7 @@ async function addMoreGames(){
     return;
   }
   await saveTournament(t);
+  haptic("medium");
   render();
   showToast("Added another round of games");
 }
@@ -2345,6 +2356,7 @@ async function adminDeleteSession(key){
   try{
     const { error } = await sbClient.from("kv_store").delete().eq("key", key);
     if(error){ showToast("Delete failed: "+error.message); return; }
+    haptic("strong");
     showToast("Session deleted");
     await loadAdminSessions();
   }catch(e){
@@ -2457,6 +2469,7 @@ function addPlayer(){
   const duprVal = duprEl.value.trim();
   state.form.players.push({name, dupr: duprVal ? parseFloat(duprVal) : null});
   state.form.playersConfirmed = false;
+  haptic("light");
   render();
 }
 
@@ -2492,7 +2505,7 @@ async function handleJoin(inputId){
   state.tCode = val;
   state.kitchenRatings = null; state.expandedRating = null; state.editingMatchId = null;
   render();
-  if(t) startPolling();
+  if(t){ haptic("medium"); startPolling(); }
 }
 
 async function buildTournament(){
@@ -2561,6 +2574,7 @@ async function buildTournament(){
 
   state.loading = false;
   state.tournament = tournament;
+  haptic("medium");
   nav("confirm");
 }
 
@@ -2578,6 +2592,7 @@ async function startKnockout(){
   qualifiers = shuffle(qualifiers); // light shuffle so same-group pairs aren't guaranteed to meet immediately after seeding order
   t.bracket = makeBracket(qualifiers);
   await saveTournament(t);
+  haptic("medium");
   render();
 }
 
@@ -2593,6 +2608,7 @@ async function handleSaveScore(mid, ctx){
   if(!match) return;
   match.scoreA = sa; match.scoreB = sb;
   match.winner = sa>sb ? match.a.id : match.b.id;
+  haptic("light");
 
   if(ctx==="ko") propagateBracket(t.bracket);
 
@@ -2619,6 +2635,7 @@ async function handleRemoveMatch(mid, ctx){
     if(idx>=0) t.matches.splice(idx,1);
   }
   await saveTournament(t);
+  haptic("strong");
   render();
   showToast("Match removed");
 }
@@ -2654,6 +2671,7 @@ async function endSession(){
   t.ended = true;
   t.endedAt = Date.now();
   await saveTournament(t);
+  haptic("strong");
   render();
   showToast("Session ended");
 }
@@ -2666,6 +2684,7 @@ function findMatch(t, mid, ctx){
 }
 
 function copyText(text, msg){
+  haptic("light");
   navigator.clipboard?.writeText(text).then(()=>showToast(msg)).catch(()=>showToast(text));
 }
 
