@@ -1804,6 +1804,17 @@ function renderAdminDashboard(){
       <p class="help">Removes them from the autocomplete list. Their existing match history stays intact.</p>
     </div>
     <div class="card">
+      <p class="eyebrow">Manage DUPR ratings</p>
+      <p class="sub" style="margin-top:0;">Update a player's saved DUPR &mdash; auto-fills next time their name is entered. Doesn't rewrite past sessions.</p>
+      ${state.playerDb.length ? state.playerDb.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`
+        <div class="player-add-row">
+          <div class="field" style="flex:2;"><label style="text-transform:none; letter-spacing:0; font-size:14px;">${p.name}</label></div>
+          <div class="field dupr"><input type="text" class="admin-dupr-input" data-name="${p.name}" value="${p.dupr!=null?p.dupr:""}" placeholder="e.g. 3.5"></div>
+          <button class="btn btn-ink btn-sm" data-action="admin-save-dupr" data-name="${p.name}" style="height:44px;">Save</button>
+        </div>
+      `).join("") : `<p class="help">No players yet.</p>`}
+    </div>
+    <div class="card">
       <p class="eyebrow">All sessions (${sessions?sessions.length:0})</p>
       ${!sessions || !sessions.length ? `<p class="help">No sessions found.</p>` : sessions.map(s=>`
         <div class="match-card">
@@ -2084,6 +2095,7 @@ function bindEvents(){
     else if(action==="admin-logout") await adminLogoutHandler();
     else if(action==="admin-delete-session") await adminDeleteSession(el.dataset.key);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
+    else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
   };
 }
 
@@ -2399,6 +2411,24 @@ async function adminRemovePlayer(name){
   showToast(`Removed ${name} from the shared player list`);
   render();
 }
+async function adminSaveDupr(name){
+  const inputs = document.querySelectorAll(".admin-dupr-input");
+  let el = null;
+  inputs.forEach(inp => { if(inp.dataset.name === name) el = inp; });
+  if(!el) return;
+  const val = el.value.trim();
+  const duprVal = val === "" ? null : parseFloat(val);
+  if(val !== "" && (isNaN(duprVal) || duprVal<1 || duprVal>8)){ showToast("Enter a valid DUPR (1.0–8.0) or leave blank"); return; }
+  const raw = await storeGet(PLAYER_DB_KEY, true);
+  let db = []; try{ db = raw ? JSON.parse(raw) : []; }catch(e){ db = []; }
+  const idx = db.findIndex(p=>p.name===name);
+  if(idx<0){ showToast("Player not found"); return; }
+  db[idx].dupr = duprVal;
+  await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
+  state.playerDb = db;
+  showToast(`Updated ${name}'s DUPR`);
+  render();
+}
 
 async function openProfile(name){
   if(!name){ showToast("Enter a player name"); return; }
@@ -2468,6 +2498,13 @@ function pullFormInputs(){
 // re-pull on change so state stays fresh without full re-render loop
 document.addEventListener("change", (e)=>{
   if(state.route==="create" && e.target.closest("#view")) pullFormInputs();
+  if(e.target && e.target.id==="p-name"){
+    const match = state.playerDb.find(p=>p.name.toLowerCase()===e.target.value.trim().toLowerCase());
+    const duprEl = document.getElementById("p-dupr");
+    if(match && match.dupr!=null && duprEl && !duprEl.value){
+      duprEl.value = match.dupr;
+    }
+  }
 });
 
 function enforceParityRule(){
