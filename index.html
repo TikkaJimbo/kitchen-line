@@ -755,13 +755,12 @@ function buildTimeSeries(records){
     const s = sessionMap[r.code];
     s.games++; if(r.won) s.wins++; s.netSum += (r.scoreFor - r.scoreAgainst);
   });
-  let cumWins=0, cumGames=0, cumNet=0;
   return sessionOrder.map((code,i)=>{
     const s = sessionMap[code];
-    cumWins += s.wins; cumGames += s.games; cumNet += s.netSum;
-    const sessionNet = s.netSum/s.games;
-    const tooltip = `${s.date} \u2014 ${s.wins}-${s.games-s.wins} this session (net ${sessionNet>0?"+":""}${sessionNet.toFixed(1)}/game) \u00b7 ${s.location}`;
-    return { date:s.date, x:i+1, winRate:(cumWins/cumGames)*100, netPerGame: cumNet/cumGames, tooltip };
+    const winRate = (s.wins/s.games)*100;
+    const netPerGame = s.netSum/s.games;
+    const tooltip = `${s.date} \u2014 ${s.wins}-${s.games-s.wins} this session (net ${netPerGame>0?"+":""}${netPerGame.toFixed(1)}/game) \u00b7 ${s.location}`;
+    return { date:s.date, x:i+1, winRate, netPerGame, tooltip };
   });
 }
 function summarizeCategory(records){
@@ -798,7 +797,7 @@ async function buildPlayerStatsBundle(name){
   const history = [];
   const courtsVisited = new Set();
   const championships = [];
-  const sessionRatings = [];
+  const ratingEntries = [];
   const ratingCache = {};
   let memberSince = null;
   for(const code of codes.slice(0,25)){
@@ -819,12 +818,17 @@ async function buildPlayerStatsBundle(name){
         if(champNames.includes(name)) championships.push({code:t.code, location:t.location, date:t.date});
       }
       const rating = await computeKitchenRating(t, name, ratingCache);
-      if(rating) sessionRatings.push(rating.overall);
+      if(rating) ratingEntries.push({date:t.date, code:t.code, location:t.location, value:rating.overall, label:rating.label});
     }
   }
   allRecords.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
   history.sort((a,b)=> a.date<b.date ? 1 : -1);
   championships.sort((a,b)=> a.date<b.date ? 1 : -1);
+  ratingEntries.sort((a,b)=> a.date<b.date ? -1 : (a.date>b.date ? 1 : 0));
+  const ratingTimeSeries = ratingEntries.map((e,i)=>({
+    date: e.date, x: i+1, value: e.value,
+    tooltip: `${e.date} \u2014 Rating ${e.value.toFixed(1)} (${e.label}) \u00b7 ${e.location}`
+  }));
   const singles = summarizeCategory(allRecords.filter(r=>r.category==="singles"));
   const doubles = summarizeCategory(allRecords.filter(r=>r.category==="doubles"));
   const tournamentCount = new Set(allRecords.map(r=>r.code)).size;
@@ -832,11 +836,11 @@ async function buildPlayerStatsBundle(name){
   const maxCombinedStreak = computeStreaks(allRecords).maxWin;
   const bundleTotals = { totalGames: allRecords.length, totalWins, tournamentCount, maxCombinedStreak };
   const milestones = MILESTONE_DEFS.filter(m=>m.test(bundleTotals));
-  const avgRating = sessionRatings.length ? sessionRatings.reduce((a,b)=>a+b,0)/sessionRatings.length : null;
+  const avgRating = ratingEntries.length ? ratingEntries.reduce((a,b)=>a+b.value,0)/ratingEntries.length : null;
   return {
     singles, doubles, tournamentCount, totalMatches: allRecords.length, history,
     courtsVisited: [...courtsVisited], championships, memberSince, milestones,
-    avgRating, ratedSessions: sessionRatings.length
+    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries
   };
 }
 function renderLineChart(points, opts){
@@ -1531,6 +1535,7 @@ function renderProfile(){
       </div>
     </div>
     ${renderPassport(p)}
+    ${renderRatingChart(p)}
     ${p.singles ? renderCategoryBlock("Singles", "🎾", p.singles, false) : ""}
     ${p.doubles ? renderCategoryBlock("Doubles", "🤝", p.doubles, true) : ""}
     <div class="card">
@@ -1571,6 +1576,16 @@ function renderPassport(p){
           </div>`).join("")}` : ""}
     </div>
   `;
+}
+function renderRatingChart(p){
+  if(!p.ratingTimeSeries || !p.ratingTimeSeries.length) return "";
+  return `
+    <div class="card">
+      <p class="eyebrow">Kitchen Rating</p>
+      <h2 style="margin-bottom:2px;">Rating per session</h2>
+      <p class="sub">Not cumulative &mdash; each point is that session's own Kitchen Rating.</p>
+      ${renderLineChart(p.ratingTimeSeries, {field:"value", color:"#B9970A", yMin:0, yMax:10, yFormat:v=>v.toFixed(1)})}
+    </div>`;
 }
 function renderCategoryBlock(title, emoji, cat, isDoubles){
   const streaks = cat.streaks;
@@ -1627,11 +1642,11 @@ function renderCategoryBlock(title, emoji, cat, isDoubles){
       </table></div>` : `<p class="help">No partner history yet.</p>`}` : ""}
 
       <div class="chart-block">
-        <h4>Win rate over time</h4>
+        <h4>Win rate per session</h4>
         ${renderLineChart(cat.timeSeries, {field:"winRate", color:"#0E5C55", yMin:0, yMax:100, yFormat:v=>Math.round(v)+"%"})}
       </div>
       <div class="chart-block">
-        <h4>Net points/game over time</h4>
+        <h4>Net points/game per session</h4>
         ${renderLineChart(cat.timeSeries, {field:"netPerGame", color:"#C1502E", yFormat:v=>(v>0?"+":"")+v.toFixed(1)})}
       </div>
     </div>
@@ -1717,10 +1732,12 @@ function renderLeaderboard(){
     </div>`;
   if(!rows.length) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card">${toggle}<h2>No results yet</h2><p class="sub">${scope==="month"?"No games logged this month so far.":"Play a session and come back"} &mdash; the leaderboard fills in as scores get logged.</p></div>`;
   const s = state.leaderboardSort;
-  const sorted = rows.slice().sort((a,b)=> s.dir==="desc" ? b[s.key]-a[s.key] : a[s.key]-b[s.key]);
+  const val = r => r[s.key]==null ? -1 : r[s.key];
+  const sorted = rows.slice().sort((a,b)=> s.dir==="desc" ? val(b)-val(a) : val(a)-val(b));
   const cols = [
     {key:"sessions", label:"Sessions"}, {key:"games", label:"Games"}, {key:"wins", label:"Wins"},
-    {key:"losses", label:"Losses"}, {key:"winRate", label:"Win %"}, {key:"netPts", label:"Net Pts"}
+    {key:"losses", label:"Losses"}, {key:"winRate", label:"Win %"}, {key:"netPts", label:"Net Pts"},
+    {key:"avgRating", label:"Rating"}
   ];
   const arrow = k => s.key===k ? (s.dir==="desc" ? " ↓" : " ↑") : "";
   return `
@@ -1738,7 +1755,7 @@ function renderLeaderboard(){
           <tr>
             <td class="player-link" data-action="view-profile" data-name="${r.name}">${r.name}</td>
             <td>${r.sessions}</td><td>${r.games}</td><td>${r.wins}</td><td>${r.losses}</td>
-            <td>${Math.round(r.winRate*100)}%</td><td>${r.netPts>0?"+":""}${r.netPts.toFixed(1)}</td>
+            <td>${Math.round(r.winRate*100)}%</td><td>${r.netPts>0?"+":""}${r.netPts.toFixed(1)}</td><td>${r.avgRating!=null?r.avgRating.toFixed(1):"—"}</td>
           </tr>`).join("")}
       </table></div>
     </div>
@@ -2256,12 +2273,14 @@ async function openLeaderboard(){
   stopPolling();
   state.loading = true; state.route = "leaderboard"; state.leaderboardScope = state.leaderboardScope || "all"; render();
   const cache = {};
+  const ratingCache = {};
   const rowsAll = [], rowsMonth = [];
   const nowMonth = new Date().toISOString().slice(0,7);
   for(const dbP of state.playerDb){
     const codes = await getPlayerIndex(dbP.name);
     let all = {played:0,won:0,lost:0,pf:0,pa:0,tCount:0};
     let month = {played:0,won:0,lost:0,pf:0,pa:0,tCount:0};
+    let allRatings = [], monthRatings = [];
     for(const code of codes){
       let t = cache[code];
       if(t===undefined){ t = await loadTournamentByCode(code); cache[code]=t; }
@@ -2269,20 +2288,24 @@ async function openLeaderboard(){
       const rec = extractPlayerRecord(t, dbP.name);
       if(rec.played===0) continue;
       all.played+=rec.played; all.won+=rec.won; all.lost+=rec.lost; all.pf+=rec.pf; all.pa+=rec.pa; all.tCount++;
-      if(t.date && t.date.slice(0,7)===nowMonth){
+      const isThisMonth = t.date && t.date.slice(0,7)===nowMonth;
+      if(isThisMonth){
         month.played+=rec.played; month.won+=rec.won; month.lost+=rec.lost; month.pf+=rec.pf; month.pa+=rec.pa; month.tCount++;
       }
+      const rating = await computeKitchenRating(t, dbP.name, ratingCache);
+      if(rating){ allRatings.push(rating.overall); if(isThisMonth) monthRatings.push(rating.overall); }
     }
-    if(all.played) rowsAll.push(leaderboardRow(dbP.name, all));
-    if(month.played) rowsMonth.push(leaderboardRow(dbP.name, month));
+    if(all.played) rowsAll.push(leaderboardRow(dbP.name, all, allRatings));
+    if(month.played) rowsMonth.push(leaderboardRow(dbP.name, month, monthRatings));
   }
   state.loading = false;
   state.leaderboardRowsAll = rowsAll;
   state.leaderboardRowsMonth = rowsMonth;
   render();
 }
-function leaderboardRow(name, agg){
-  return { name, sessions:agg.tCount, games:agg.played, wins:agg.won, losses:agg.lost, winRate:agg.played?agg.won/agg.played:0, netPts:agg.played?(agg.pf-agg.pa)/agg.played:0 };
+function leaderboardRow(name, agg, ratings){
+  const avgRating = ratings && ratings.length ? ratings.reduce((a,b)=>a+b,0)/ratings.length : null;
+  return { name, sessions:agg.tCount, games:agg.played, wins:agg.won, losses:agg.lost, winRate:agg.played?agg.won/agg.played:0, netPts:agg.played?(agg.pf-agg.pa)/agg.played:0, avgRating };
 }
 function setLeaderboardSort(key){
   const s = state.leaderboardSort;
