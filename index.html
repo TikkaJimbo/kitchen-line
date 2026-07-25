@@ -188,6 +188,7 @@
   .profile-head{display:flex; align-items:center; gap:14px; margin-bottom:6px;}
   .profile-avatar{width:52px; height:52px; border-radius:50%; background:var(--ball); border:2px solid var(--ink); display:flex; align-items:center; justify-content:center; font-family:'Anton',sans-serif; font-size:20px;}
   .stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0;}
+  .stat-grid.cols-6{grid-template-columns:repeat(6,1fr);}
   .stat-grid.cols-5{grid-template-columns:repeat(5,1fr);}
   .stat-grid.cols-3{grid-template-columns:repeat(3,1fr);}
   .stat-tile{background:#fff; border:2px solid var(--line); border-radius:12px; padding:12px; text-align:center;}
@@ -501,12 +502,14 @@ const ACHIEVEMENT_DEFS = {
   iceCold: {emoji:"❄️", title:"Ice Cold", desc:"Lost 5 in a row"},
   giantKiller: {emoji:"💀", title:"Giant Killer", desc:"Beat the highest-rated player"},
   nailBiter: {emoji:"🎯", title:"Nail Biter", desc:"Won by 2 points or less"},
-  train: {emoji:"🚂", title:"Train", desc:"Won by 10+ points"},
+  bigWin: {emoji:"💪", title:"Big Win", desc:"Won by 5+ points, opponent got on the board"},
+  flawless: {emoji:"🛡️", title:"Flawless Win", desc:"Won without conceding a point"},
   dynamicDuo: {emoji:"🤝", title:"Dynamic Duo", desc:"Best partnership today"}
 };
 function computeSessionAchievements(t){
   const names = allTournamentPlayerNames(t);
-  const badges = {}; names.forEach(n=>badges[n]=[]);
+  const counts = {}; names.forEach(n=>counts[n]={});
+  const bump = (name,key)=>{ counts[name][key] = (counts[name][key]||0)+1; };
   const topRated = t.participants.filter(p=>p.dupr!=null).sort((a,b)=>b.dupr-a.dupr)[0];
   const topNames = topRated ? (topRated.players || [topRated.label]) : [];
   const perPlayerRecords = {};
@@ -514,13 +517,18 @@ function computeSessionAchievements(t){
     const recs = extractPlayerMatchRecords(t, name);
     perPlayerRecords[name] = recs;
     if(!recs.length) return;
-    if(recs.every(r=>r.won)) badges[name].push(ACHIEVEMENT_DEFS.cleanSweep);
+    if(recs.every(r=>r.won)) counts[name].cleanSweep = 1;
     const streaks = computeStreaks(recs);
-    if(streaks.maxWin>=5) badges[name].push(ACHIEVEMENT_DEFS.onFire);
-    if(streaks.maxLoss>=5) badges[name].push(ACHIEVEMENT_DEFS.iceCold);
-    if(topRated && !topNames.includes(name) && recs.some(r=>r.won && r.opponents.some(o=>topNames.includes(o)))) badges[name].push(ACHIEVEMENT_DEFS.giantKiller);
-    if(recs.some(r=>r.won && (r.scoreFor-r.scoreAgainst)>0 && (r.scoreFor-r.scoreAgainst)<=2)) badges[name].push(ACHIEVEMENT_DEFS.nailBiter);
-    if(recs.some(r=>r.won && (r.scoreFor-r.scoreAgainst)>=10)) badges[name].push(ACHIEVEMENT_DEFS.train);
+    if(streaks.maxWin>=5) counts[name].onFire = 1;
+    if(streaks.maxLoss>=5) counts[name].iceCold = 1;
+    recs.forEach(r=>{
+      if(!r.won) return;
+      const margin = r.scoreFor - r.scoreAgainst;
+      if(topRated && !topNames.includes(name) && r.opponents.some(o=>topNames.includes(o))) bump(name,"giantKiller");
+      if(margin>0 && margin<=2) bump(name,"nailBiter");
+      else if(margin>=5 && r.scoreAgainst>0) bump(name,"bigWin");
+      if(r.scoreAgainst===0) bump(name,"flawless");
+    });
   });
   const pairStats = {};
   names.forEach(name=>{
@@ -537,23 +545,26 @@ function computeSessionAchievements(t){
   if(pool.length){
     const best = pool.slice().sort((a,b)=> (b.wins/b.played)-(a.wins/a.played))[0];
     if(best && best.wins/best.played >= 0.5){
-      best.players.forEach(n=> badges[n] && badges[n].push(ACHIEVEMENT_DEFS.dynamicDuo));
+      best.players.forEach(n=> { if(counts[n]) counts[n].dynamicDuo = 1; });
     }
   }
-  return badges;
+  return counts;
 }
 function renderAchievements(t){
-  const badges = computeSessionAchievements(t);
-  const entries = Object.entries(badges).filter(([n,b])=>b.length);
+  const counts = computeSessionAchievements(t);
+  const entries = Object.entries(counts).filter(([n,c])=>Object.keys(c).length);
   if(!entries.length) return "";
   return `
     <div class="card">
       <p class="eyebrow">Session achievements</p>
-      ${entries.map(([name,list])=>`
+      ${entries.map(([name,c])=>`
         <div class="history-row" style="align-items:flex-start;">
           <div class="loc" style="padding-top:4px;">${name}</div>
           <div style="display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end;">
-            ${list.map(b=>`<span class="streak-badge hot" title="${b.desc}">${b.emoji} ${b.title}</span>`).join("")}
+            ${Object.entries(c).map(([key,n])=>{
+              const b = ACHIEVEMENT_DEFS[key];
+              return `<span class="streak-badge hot" title="${b.desc}">${b.emoji} ${b.title} &times;${n}</span>`;
+            }).join("")}
           </div>
         </div>`).join("")}
       <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:3px;">
@@ -801,6 +812,7 @@ async function buildPlayerStatsBundle(name){
   const ratingEntries = [];
   const ratingCache = {};
   let memberSince = null;
+  let totalAchievements = 0;
   for(const code of codes.slice(0,25)){
     const t = await loadTournamentByCode(code);
     if(!t) continue;
@@ -820,6 +832,8 @@ async function buildPlayerStatsBundle(name){
       }
       const rating = await computeKitchenRating(t, name, ratingCache);
       if(rating) ratingEntries.push({date:t.date, code:t.code, location:t.location, value:rating.overall, label:rating.label});
+      const myAchievements = computeSessionAchievements(t)[name];
+      if(myAchievements) totalAchievements += Object.values(myAchievements).reduce((a,b)=>a+b,0);
     }
   }
   allRecords.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
@@ -841,7 +855,7 @@ async function buildPlayerStatsBundle(name){
   return {
     singles, doubles, tournamentCount, totalMatches: allRecords.length, history,
     courtsVisited: [...courtsVisited], championships, memberSince, milestones,
-    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries
+    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries, totalAchievements
   };
 }
 function renderLineChart(points, opts){
@@ -1563,11 +1577,12 @@ function renderPassport(p){
     <div class="category-block" style="background:var(--ink); color:var(--kitchen); border-color:var(--ink);">
       <h3 style="color:var(--ball);">🛂 Pickleball Passport</h3>
       <p class="sub" style="color:#B9CFCB; margin-top:0;">${p.memberSince ? "Playing since "+p.memberSince : "New player"}</p>
-      <div class="stat-grid cols-${p.avgRating!=null?5:4}">
+      <div class="stat-grid cols-${p.avgRating!=null?6:5}">
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.courtsVisited.length}</div><div class="lbl" style="color:#B9CFCB;">Courts visited</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.tournamentCount}</div><div class="lbl" style="color:#B9CFCB;">Sessions</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--ball);">${p.championships.length}</div><div class="lbl" style="color:#B9CFCB;">Championships</div></div>
         <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${p.totalMatches}</div><div class="lbl" style="color:#B9CFCB;">Career games</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">🏅 ${p.totalAchievements}</div><div class="lbl" style="color:#B9CFCB;">Achievements</div></div>
         ${p.avgRating!=null ? `<div class="stat-tile" style="background:rgba(215,230,57,0.15); border-color:var(--ball);"><div class="num" style="color:var(--ball);">${p.avgRating.toFixed(1)}</div><div class="lbl" style="color:#B9CFCB;">Avg rating</div></div>` : ""}
       </div>
       ${p.courtsVisited.length ? `<p style="font-size:12.5px; color:#DCEDEA; margin:10px 0 0;"><b style="color:var(--kitchen);">Courts:</b> ${p.courtsVisited.join(", ")}</p>` : ""}
