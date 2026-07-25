@@ -952,6 +952,10 @@ const MILESTONE_DEFS = [
   {key:"sessions50", test:b=>b.tournamentCount>=50, emoji:"\ud83c\udf7d\ufe0f", title:"50 Sessions"},
   {key:"streak10", test:b=>b.maxCombinedStreak>=10, emoji:"\ud83d\udd1f", title:"10-Game Win Streak"}
 ];
+function findParticipantDupr(t, name){
+  const p = t.participants.find(pp=> pp.label===name || (pp.players && pp.players.includes(name)));
+  return p ? p.dupr : null;
+}
 async function buildPlayerStatsBundle(name){
   const codes = await getPlayerIndex(name);
   let allRecords = [];
@@ -962,6 +966,14 @@ async function buildPlayerStatsBundle(name){
   const ratingCache = {};
   let memberSince = null;
   let totalAchievements = 0;
+  const achievementCounts = {};
+  let closestCleanSweepPct = 0;
+  let closestOnFireStreak = 0;
+  let closestIceColdStreak = 0;
+  let closestGiantKill = null;
+  let closestNailBiterMargin = null;
+  let closestAnyMargin = null;
+  let biggestWinMargin = null;
   for(const code of codes.slice(0,25)){
     const t = await loadTournamentByCode(code);
     if(!t) continue;
@@ -982,7 +994,30 @@ async function buildPlayerStatsBundle(name){
       const rating = await computeKitchenRating(t, name, ratingCache);
       if(rating) ratingEntries.push({date:t.date, code:t.code, location:t.location, value:rating.overall, label:rating.label});
       const myAchievements = computeSessionAchievements(t)[name];
-      if(myAchievements) totalAchievements += Object.values(myAchievements).reduce((a,b)=>a+b,0);
+      if(myAchievements){
+        Object.entries(myAchievements).forEach(([k,v])=>{
+          achievementCounts[k] = (achievementCounts[k]||0)+v;
+          totalAchievements += v;
+        });
+      }
+      const sessionWinPct = recs.filter(r=>r.won).length/recs.length*100;
+      if(sessionWinPct > closestCleanSweepPct) closestCleanSweepPct = sessionWinPct;
+      const sessionStreaks = computeStreaks(recs);
+      if(sessionStreaks.maxWin > closestOnFireStreak) closestOnFireStreak = sessionStreaks.maxWin;
+      if(sessionStreaks.maxLoss > closestIceColdStreak) closestIceColdStreak = sessionStreaks.maxLoss;
+      recs.forEach(r=>{
+        const margin = r.scoreFor - r.scoreAgainst;
+        if(r.won){
+          if(closestNailBiterMargin===null || margin<closestNailBiterMargin) closestNailBiterMargin = margin;
+          if(r.scoreAgainst>0 && (biggestWinMargin===null || margin>biggestWinMargin)) biggestWinMargin = margin;
+          r.opponents.forEach(oppName=>{
+            const oppDupr = findParticipantDupr(t, oppName);
+            if(oppDupr!=null && (closestGiantKill===null || oppDupr>closestGiantKill.dupr)) closestGiantKill = {name:oppName, dupr:oppDupr};
+          });
+        }
+        const absMargin = Math.abs(margin);
+        if(closestAnyMargin===null || absMargin<closestAnyMargin) closestAnyMargin = absMargin;
+      });
     }
   }
   allRecords.sort((a,b)=> a.date===b.date ? a.seq-b.seq : (a.date<b.date?-1:1));
@@ -1001,10 +1036,26 @@ async function buildPlayerStatsBundle(name){
   const bundleTotals = { totalGames: allRecords.length, totalWins, tournamentCount, maxCombinedStreak };
   const milestones = MILESTONE_DEFS.filter(m=>m.test(bundleTotals));
   const avgRating = ratingEntries.length ? ratingEntries.reduce((a,b)=>a+b.value,0)/ratingEntries.length : null;
+  const achievementBreakdown = Object.keys(ACHIEVEMENT_DEFS).map(key=>{
+    const def = ACHIEVEMENT_DEFS[key];
+    const count = achievementCounts[key] || 0;
+    let closest = null;
+    if(count===0){
+      if(key==="cleanSweep") closest = closestCleanSweepPct>0 ? `Best session so far: ${Math.round(closestCleanSweepPct)}% wins` : "No sessions played yet";
+      else if(key==="onFire") closest = closestOnFireStreak>0 ? `Best streak so far: ${closestOnFireStreak} win${closestOnFireStreak===1?"":"s"} in a row` : "No wins yet";
+      else if(key==="iceCold") closest = closestIceColdStreak>0 ? `Worst streak so far: ${closestIceColdStreak} loss${closestIceColdStreak===1?"":"es"} in a row` : "No losses yet";
+      else if(key==="giantKiller") closest = closestGiantKill ? `Highest-rated player beaten: ${closestGiantKill.name} (DUPR ${closestGiantKill.dupr})` : "No DUPR wins on record yet";
+      else if(key==="nailBiter") closest = closestNailBiterMargin!=null ? `Closest win so far: by ${closestNailBiterMargin}` : (closestAnyMargin!=null ? `Closest game so far: within ${closestAnyMargin}` : "No games yet");
+      else if(key==="bigWin") closest = biggestWinMargin!=null ? `Biggest win so far: by ${biggestWinMargin}` : "No qualifying wins yet";
+      else if(key==="flawless") closest = "Do u have what it takes to go 11-0 boi?";
+      else if(key==="dynamicDuo") closest = "Do u believe in partnerships, my friend?";
+    }
+    return { key, emoji:def.emoji, title:def.title, desc:def.desc, count, closest };
+  });
   return {
     singles, doubles, tournamentCount, totalMatches: allRecords.length, history,
     courtsVisited: [...courtsVisited], championships, memberSince, milestones,
-    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries, totalAchievements
+    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries, totalAchievements, achievementBreakdown
   };
 }
 function renderLineChart(points, opts){
@@ -1709,6 +1760,7 @@ function renderProfile(){
       </div>
     </div>
     ${renderPassport(p)}
+    ${renderAchievementBreakdown(p)}
     ${renderRatingChart(p)}
     ${p.singles ? renderCategoryBlock("Singles", "🎾", p.singles, false) : ""}
     ${p.doubles ? renderCategoryBlock("Doubles", "🤝", p.doubles, true) : ""}
@@ -1751,6 +1803,23 @@ function renderPassport(p){
           </div>`).join("")}` : ""}
     </div>
   `;
+}
+function renderAchievementBreakdown(p){
+  if(!p.achievementBreakdown) return "";
+  return `
+    <div class="card">
+      <p class="eyebrow">Achievement Breakdown</p>
+      <h2 style="margin-bottom:2px;">${p.totalAchievements} earned total</h2>
+      <div class="table-scroll"><table>
+        <tr><th>Badge</th><th>Earned</th><th>Notes</th></tr>
+        ${p.achievementBreakdown.map(a=>`
+          <tr>
+            <td>${a.emoji} ${a.title}</td>
+            <td>${a.count>0 ? `&times;${a.count}` : "&mdash;"}</td>
+            <td style="color:var(--muted); font-size:12.5px; font-weight:600;">${a.count>0 ? a.desc : a.closest}</td>
+          </tr>`).join("")}
+      </table></div>
+    </div>`;
 }
 function renderRatingChart(p){
   if(!p.ratingTimeSeries || !p.ratingTimeSeries.length) return "";
