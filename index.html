@@ -248,6 +248,13 @@
   .back-link{background:none; border:none; color:var(--court); font-weight:800; font-size:13px; cursor:pointer; padding:0; margin-bottom:14px; display:inline-flex; align-items:center; gap:5px;}
   .footer-note{text-align:center; color:var(--muted); font-size:11.5px; margin-top:30px; line-height:1.6; font-weight:600;}
   .table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .milestone-row{margin-bottom:16px;}
+  .milestone-row:last-child{margin-bottom:0;}
+  .milestone-label{font-weight:800; font-size:14.5px; margin-bottom:4px;}
+  .milestone-label.earned{color:var(--court);}
+  .progress-bar{background:var(--line); border-radius:999px; height:8px; overflow:hidden; margin:4px 0 5px;}
+  .progress-fill{background:var(--court); height:100%; border-radius:999px;}
+  .progress-text{font-size:11.5px; color:var(--muted); font-weight:700;}
   @media(max-width:520px){
     body{font-size:15px;}
     #app{padding:0 12px 70px;}
@@ -946,12 +953,9 @@ function summarizeCategory(records){
     timeSeries: buildTimeSeries(records)
   };
 }
-const MILESTONE_DEFS = [
-  {key:"games100", test:b=>b.totalGames>=100, emoji:"\ud83d\udcaf", title:"100 Games Played"},
-  {key:"wins100", test:b=>b.totalWins>=100, emoji:"\ud83c\udfc5", title:"100 Wins"},
-  {key:"sessions50", test:b=>b.tournamentCount>=50, emoji:"\ud83c\udf7d\ufe0f", title:"50 Sessions"},
-  {key:"streak10", test:b=>b.maxCombinedStreak>=10, emoji:"\ud83d\udd1f", title:"10-Game Win Streak"}
-];
+const GAMES_TIERS = [20, 50, 100];
+const WINS_TIERS = [10, 25, 50, 100];
+const STREAK_TIERS = [5, 10];
 function findParticipantDupr(t, name){
   const p = t.participants.find(pp=> pp.label===name || (pp.players && pp.players.includes(name)));
   return p ? p.dupr : null;
@@ -1034,7 +1038,6 @@ async function buildPlayerStatsBundle(name){
   const totalWins = allRecords.filter(r=>r.won).length;
   const maxCombinedStreak = computeStreaks(allRecords).maxWin;
   const bundleTotals = { totalGames: allRecords.length, totalWins, tournamentCount, maxCombinedStreak };
-  const milestones = MILESTONE_DEFS.filter(m=>m.test(bundleTotals));
   const avgRating = ratingEntries.length ? ratingEntries.reduce((a,b)=>a+b.value,0)/ratingEntries.length : null;
   const achievementBreakdown = Object.keys(ACHIEVEMENT_DEFS).map(key=>{
     const def = ACHIEVEMENT_DEFS[key];
@@ -1054,8 +1057,9 @@ async function buildPlayerStatsBundle(name){
   });
   return {
     singles, doubles, tournamentCount, totalMatches: allRecords.length, history,
-    courtsVisited: [...courtsVisited], championships, memberSince, milestones,
-    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries, totalAchievements, achievementBreakdown
+    courtsVisited: [...courtsVisited], championships, memberSince,
+    avgRating, ratedSessions: ratingEntries.length, ratingTimeSeries, totalAchievements, achievementBreakdown,
+    careerTotals: { totalGames: allRecords.length, totalWins, maxCombinedStreak }
   };
 }
 function renderLineChart(points, opts){
@@ -1761,6 +1765,7 @@ function renderProfile(){
     </div>
     ${renderPassport(p)}
     ${renderAchievementBreakdown(p)}
+    ${renderCareerBadges(p)}
     ${renderRatingChart(p)}
     ${p.singles ? renderCategoryBlock("Singles", "🎾", p.singles, false) : ""}
     ${p.doubles ? renderCategoryBlock("Doubles", "🤝", p.doubles, true) : ""}
@@ -1789,11 +1794,6 @@ function renderPassport(p){
         ${p.avgRating!=null ? `<div class="stat-tile" style="background:rgba(215,230,57,0.15); border-color:var(--ball);"><div class="num" style="color:var(--ball);">${p.avgRating.toFixed(1)}</div><div class="lbl" style="color:#B9CFCB;">Avg rating</div></div>` : ""}
       </div>
       ${p.courtsVisited.length ? `<p style="font-size:12.5px; color:#DCEDEA; margin:10px 0 0;"><b style="color:var(--kitchen);">Courts:</b> ${p.courtsVisited.join(", ")}</p>` : ""}
-      ${p.milestones.length ? `
-        <p class="eyebrow" style="color:var(--ball); margin-top:16px;">Milestones</p>
-        <div style="display:flex; flex-wrap:wrap; gap:8px;">
-          ${p.milestones.map(m=>`<span class="streak-badge hot" style="background:rgba(215,230,57,0.15); border-color:var(--ball); color:var(--kitchen);">${m.emoji} ${m.title}</span>`).join("")}
-        </div>` : ""}
       ${p.championships.length ? `
         <p class="eyebrow" style="color:var(--ball); margin-top:16px;">Championship history</p>
         ${p.championships.slice(0,6).map(c=>`
@@ -1803,6 +1803,42 @@ function renderPassport(p){
           </div>`).join("")}` : ""}
     </div>
   `;
+}
+function renderTierProgress(trackLabel, emoji, tiers, currentValue){
+  const achievedTiers = tiers.filter(t=>currentValue>=t);
+  const highestAchieved = achievedTiers.length ? achievedTiers[achievedTiers.length-1] : null;
+  const nextTier = tiers.find(t=>currentValue<t) || null;
+  if(highestAchieved===null){
+    const target = tiers[0];
+    const pct = Math.max(2, Math.min(100, (currentValue/target)*100));
+    return `
+      <div class="milestone-row">
+        <div class="milestone-label">${emoji} ${target} ${trackLabel}</div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;"></div></div>
+        <div class="progress-text">${currentValue}/${target} \u2014 ${target-currentValue} to go</div>
+      </div>`;
+  }
+  let html = `<div class="milestone-row"><div class="milestone-label earned">${emoji} ${highestAchieved} ${trackLabel} \u2713</div>`;
+  if(nextTier){
+    const pct = Math.max(2, Math.min(100, (currentValue/nextTier)*100));
+    html += `<div class="progress-bar"><div class="progress-fill" style="width:${pct}%;"></div></div><div class="progress-text">${currentValue}/${nextTier} \u2014 ${nextTier-currentValue} to go</div>`;
+  } else {
+    html += `<div class="progress-text">Top tier reached \ud83c\udf89</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+function renderCareerBadges(p){
+  if(!p.careerTotals) return "";
+  const c = p.careerTotals;
+  return `
+    <div class="card">
+      <p class="eyebrow">Career Badges</p>
+      <h2 style="margin-bottom:14px;">Progress toward the next milestone</h2>
+      ${renderTierProgress("Games Played", "\ud83c\udfae", GAMES_TIERS, c.totalGames)}
+      ${renderTierProgress("Wins", "\ud83c\udfc6", WINS_TIERS, c.totalWins)}
+      ${renderTierProgress("Game Win Streak", "\ud83d\udd25", STREAK_TIERS, c.maxCombinedStreak)}
+    </div>`;
 }
 function renderAchievementBreakdown(p){
   if(!p.achievementBreakdown) return "";
