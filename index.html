@@ -353,7 +353,8 @@ let state = {
   editingMatchId: null,
   sessionViewerList: null,
   partnershipList: null,
-  expandedPartnership: null
+  expandedPartnership: null,
+  profileReturnRoute: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -1751,9 +1752,9 @@ function renderView(){
 function renderProfile(){
   if(state.loading) return `<div class="empty">Loading profile…</div>`;
   const p = state.profile;
-  if(!p) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>No record yet</h2><p class="sub">This player hasn't appeared in a saved tournament, or the name doesn't match exactly.</p></div>`;
+  if(!p) return `<button class="back-link" data-action="go-back-from-profile">&larr; Back</button><div class="card"><h2>No record yet</h2><p class="sub">This player hasn't appeared in a saved tournament, or the name doesn't match exactly.</p></div>`;
   return `
-    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <button class="back-link" data-action="go-back-from-profile">&larr; Back</button>
     <div class="card">
       <div class="profile-head">
         <div class="profile-avatar">${p.name.charAt(0).toUpperCase()}</div>
@@ -2428,6 +2429,7 @@ function bindEvents(){
     else if(action==="location-view-stats") { const loc = document.getElementById("locationSelectHome").value; if(!loc){ showToast("Pick a court first"); return; } await openLocation(loc); }
     else if(action==="go-leaderboard") await openLeaderboard();
     else if(action==="go-h2h") openH2H();
+    else if(action==="go-back-from-profile") await goBackFromProfile();
     else if(action==="go-sessions") await openSessionViewer();
     else if(action==="go-partnerships") openPartnerships();
     else if(action==="compute-partnerships") await computePartnerships();
@@ -2808,6 +2810,7 @@ async function adminSaveDupr(name){
 
 async function openProfile(name){
   if(!name){ showToast("Enter a player name"); return; }
+  if(state.route!=="profile") state.profileReturnRoute = state.route;
   stopPolling();
   state.loading = true; state.route = "profile"; render();
   const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
@@ -2816,6 +2819,17 @@ async function openProfile(name){
   state.loading = false;
   state.profile = bundle.totalMatches ? {name:trueName, dupr: dbEntry ? dbEntry.dupr : null, ...bundle} : null;
   render();
+}
+async function goBackFromProfile(){
+  const from = state.profileReturnRoute;
+  if(from==="leaderboard") await openLeaderboard();
+  else if(from==="h2h"){ state.route="h2h"; render(); }
+  else if(from==="location" && state.locationName) await openLocation(state.locationName);
+  else if(from==="view" && state.tournament){ state.route="view"; render(); startPolling(); }
+  else if(from==="sessions") await openSessionViewer();
+  else if(from==="partnerships"){ state.route="partnerships"; render(); }
+  else if(from==="admin"){ state.route="admin"; render(); }
+  else nav("home");
 }
 
 function openH2H(){
