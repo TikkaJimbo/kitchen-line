@@ -341,7 +341,8 @@ let state = {
   leaderboardRowsAll: null,
   leaderboardRowsMonth: null,
   kitchenRatings: null,
-  expandedRating: null
+  expandedRating: null,
+  editingMatchId: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -1848,6 +1849,7 @@ function renderMatchList(matches, t, ctx, editable){
 function renderMatchCard(m, t, ctx, editable){
   if(editable===undefined) editable = true;
   const removable = editable && ctx!=="ko";
+  const effectiveCtx = ctx||"rr";
   if(m.isBye){
     const real = m.a.bye ? m.b : m.a;
     return `<div class="match-card bye"><div class="side">${real.label}</div><div class="side">— Bye —</div></div>`;
@@ -1856,6 +1858,10 @@ function renderMatchCard(m, t, ctx, editable){
     return `<div class="match-card bye"><div class="side">TBD</div><div class="side">TBD</div></div>`;
   }
   const done = m.scoreA!=null && m.scoreB!=null;
+  const editablePlayers = editable && !done && (effectiveCtx==="mx" || effectiveCtx==="rr");
+  if(editablePlayers && state.editingMatchId===m.id){
+    return renderMatchEditForm(m, t, effectiveCtx);
+  }
   const aWin = done && m.winner===m.a.id, bWin = done && m.winner===m.b.id;
   if(!editable){
     return `
@@ -1869,13 +1875,50 @@ function renderMatchCard(m, t, ctx, editable){
     <div class="match-card ${done?"done":""}">
       <div class="side ${aWin?"win":""}">${m.a.label}</div>
       <div class="score-inputs">
-        <input type="number" min="0" data-mid="${m.id}" data-side="a" data-ctx="${ctx||"rr"}" value="${m.scoreA!=null?m.scoreA:""}">
+        <input type="number" min="0" data-mid="${m.id}" data-side="a" data-ctx="${effectiveCtx}" value="${m.scoreA!=null?m.scoreA:""}">
         <span>–</span>
-        <input type="number" min="0" data-mid="${m.id}" data-side="b" data-ctx="${ctx||"rr"}" value="${m.scoreB!=null?m.scoreB:""}">
+        <input type="number" min="0" data-mid="${m.id}" data-side="b" data-ctx="${effectiveCtx}" value="${m.scoreB!=null?m.scoreB:""}">
       </div>
       <div class="side ${bWin?"win":""}" style="text-align:right;">${m.b.label}</div>
-      <button class="btn btn-ink btn-sm save-score" data-action="save-score" data-mid="${m.id}" data-ctx="${ctx||"rr"}">Save</button>
-      ${removable ? `<button class="remove-btn" data-action="remove-match" data-mid="${m.id}" data-ctx="${ctx||"rr"}" title="Remove this match">✕</button>` : ""}
+      <button class="btn btn-ink btn-sm save-score" data-action="save-score" data-mid="${m.id}" data-ctx="${effectiveCtx}">Save</button>
+      ${editablePlayers ? `<button class="btn btn-outline btn-sm" data-action="start-edit-match" data-mid="${m.id}" title="Change who's playing">Edit players</button>` : ""}
+      ${removable ? `<button class="remove-btn" data-action="remove-match" data-mid="${m.id}" data-ctx="${effectiveCtx}" title="Remove this match">✕</button>` : ""}
+    </div>`;
+}
+
+function renderMatchEditForm(m, t, ctx){
+  if(ctx==="mx"){
+    const buildOpts = (current) => t.participants.map(p=>`<option value="${p.label}" ${p.label===current?"selected":""}>${p.label}</option>`).join("");
+    const [a1,a2] = m.a.players; const [b1,b2] = m.b.players;
+    return `
+      <div class="match-card" style="flex-direction:column; align-items:stretch;">
+        <p class="eyebrow" style="margin:0 0 8px;">Edit this match's players</p>
+        <div class="row">
+          <div class="field"><label>Team A &mdash; P1</label><select id="edit-a1">${buildOpts(a1)}</select></div>
+          <div class="field"><label>Team A &mdash; P2</label><select id="edit-a2">${buildOpts(a2)}</select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Team B &mdash; P1</label><select id="edit-b1">${buildOpts(b1)}</select></div>
+          <div class="field"><label>Team B &mdash; P2</label><select id="edit-b2">${buildOpts(b2)}</select></div>
+        </div>
+        <div class="chip-group">
+          <button class="btn btn-ink btn-sm" data-action="save-edit-match" data-mid="${m.id}" data-ctx="mx">Save</button>
+          <button class="btn btn-outline btn-sm" data-action="cancel-edit-match">Cancel</button>
+        </div>
+      </div>`;
+  }
+  const buildOpts = (currentId) => t.participants.map(p=>`<option value="${p.id}" ${p.id===currentId?"selected":""}>${p.label}</option>`).join("");
+  return `
+    <div class="match-card" style="flex-direction:column; align-items:stretch;">
+      <p class="eyebrow" style="margin:0 0 8px;">Edit this match's ${t.matchType==="doubles"?"teams":"players"}</p>
+      <div class="row">
+        <div class="field"><label>Side A</label><select id="edit-pa">${buildOpts(m.a.id)}</select></div>
+        <div class="field"><label>Side B</label><select id="edit-pb">${buildOpts(m.b.id)}</select></div>
+      </div>
+      <div class="chip-group">
+        <button class="btn btn-ink btn-sm" data-action="save-edit-match" data-mid="${m.id}" data-ctx="rr">Save</button>
+        <button class="btn btn-outline btn-sm" data-action="cancel-edit-match">Cancel</button>
+      </div>
     </div>`;
 }
 
@@ -1989,7 +2032,7 @@ function bindEvents(){
     else if(action==="save-score") await handleSaveScore(el.dataset.mid, el.dataset.ctx);
     else if(action==="search-profile") await openProfile(document.getElementById("profileSearchInput").value.trim());
     else if(action==="view-profile") await openProfile(el.dataset.name);
-    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; render(); startPolling(); }
+    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; render(); startPolling(); }
     else if(action==="share-whatsapp") shareWhatsapp(state.tournament);
     else if(action==="share-whatsapp-view") shareWhatsapp(state.tournament);
     else if(action==="generate-result-card") await generateResultCard();
@@ -2005,6 +2048,9 @@ function bindEvents(){
     else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
     else if(action==="add-freeplay-match") await addFreeplayMatch();
     else if(action==="remove-match") await handleRemoveMatch(el.dataset.mid, el.dataset.ctx);
+    else if(action==="start-edit-match") { state.editingMatchId = el.dataset.mid; render(); }
+    else if(action==="cancel-edit-match") { state.editingMatchId = null; render(); }
+    else if(action==="save-edit-match") await saveEditMatch(el.dataset.mid, el.dataset.ctx);
     else if(action==="end-session") await endSession();
     else if(action==="sort-leaderboard") setLeaderboardSort(el.dataset.key);
     else if(action==="go-admin") await openAdmin();
@@ -2444,7 +2490,7 @@ async function handleJoin(inputId){
   state.loading = false;
   state.tournament = t;
   state.tCode = val;
-  state.kitchenRatings = null; state.expandedRating = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.editingMatchId = null;
   render();
   if(t) startPolling();
 }
@@ -2576,6 +2622,31 @@ async function handleRemoveMatch(mid, ctx){
   render();
   showToast("Match removed");
 }
+async function saveEditMatch(mid, ctx){
+  const t = state.tournament;
+  const match = findMatch(t, mid, ctx);
+  if(!match){ state.editingMatchId = null; render(); return; }
+
+  if(ctx==="mx"){
+    const a1 = document.getElementById("edit-a1").value, a2 = document.getElementById("edit-a2").value;
+    const b1 = document.getElementById("edit-b1").value, b2 = document.getElementById("edit-b2").value;
+    const names = [a1,a2,b1,b2];
+    if(names.some(n=>!n) || new Set(names).size<4){ showToast("Each player can only appear once"); return; }
+    match.a = {id:match.a.id, label:a1+" & "+a2, players:[a1,a2]};
+    match.b = {id:match.b.id, label:b1+" & "+b2, players:[b1,b2]};
+  } else {
+    const paId = document.getElementById("edit-pa").value, pbId = document.getElementById("edit-pb").value;
+    if(!paId || !pbId || paId===pbId){ showToast("Pick two different sides"); return; }
+    const pa = t.participants.find(p=>p.id===paId), pb = t.participants.find(p=>p.id===pbId);
+    if(!pa || !pb) return;
+    match.a = pa; match.b = pb;
+  }
+
+  await saveTournament(t);
+  state.editingMatchId = null;
+  render();
+  showToast("Match updated");
+}
 async function endSession(){
   if(!confirm("End this session? This locks the bracket, finalizes standings, and stops any further score edits or new matches. You can't undo this.")) return;
   if(!confirm("Just to be sure — end the session now?")) return;
@@ -2620,7 +2691,7 @@ async function init(){
     const code = hash.replace("#code=","").toUpperCase();
     state.loading = true; state.route="view"; render();
     const t = await loadTournamentByCode(code);
-    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null;
+    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null;
     render();
     if(t) startPolling();
   } else {
