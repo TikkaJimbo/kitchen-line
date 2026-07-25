@@ -342,7 +342,8 @@ let state = {
   leaderboardRowsMonth: null,
   kitchenRatings: null,
   expandedRating: null,
-  editingMatchId: null
+  editingMatchId: null,
+  sessionViewerList: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -1131,6 +1132,7 @@ function render(){
   else if(state.route==="leaderboard") view.innerHTML = renderLeaderboard();
   else if(state.route==="admin") view.innerHTML = renderAdmin();
   else if(state.route==="h2h") view.innerHTML = renderH2H();
+  else if(state.route==="sessions") view.innerHTML = renderSessionViewer();
   bindEvents();
 }
 
@@ -1186,6 +1188,13 @@ function renderHome(){
         <select id="locationSelectHome"><option value="">Select a court</option>${SL_LOCATIONS.filter(l=>l!=="Other").map(l=>`<option value="${l}">${l}</option>`).join("")}</select>
         <button class="btn btn-ink" data-action="location-view-stats">View</button>
       </div>
+    </div>
+
+    <div class="card">
+      <p class="eyebrow">Browse the island</p>
+      <h2>Session viewer</h2>
+      <p class="sub">Every rec session played so far, most recent first.</p>
+      <button class="btn btn-outline btn-sm" data-action="go-sessions">Browse sessions</button>
     </div>
 
     <div class="card">
@@ -1696,6 +1705,27 @@ function renderH2HResult(r){
     </div>
   `;
 }
+function renderSessionViewer(){
+  if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading sessions…</div>`;
+  const list = state.sessionViewerList || [];
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">All sessions</p>
+      <h2>Session viewer</h2>
+      <p class="sub">${list.length} session${list.length===1?"":"s"} played so far, most recent first.</p>
+      ${!list.length ? `<p class="help">No sessions logged yet.</p>` : list.map(s=>`
+        <div class="match-card">
+          <div style="flex:2; min-width:180px;">
+            <div style="font-weight:800;">${s.location}</div>
+            <div class="help" style="margin:2px 0 0;">${s.date} &middot; ${s.format} &middot; ${s.matchType}</div>
+          </div>
+          <button class="btn btn-outline btn-sm" data-action="view-profile-code" data-code="${s.code}">View &middot; ${s.code}</button>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
 function renderLocation(){
   if(state.loading) return `<div class="empty">Loading location stats…</div>`;
   const s = state.locationStats;
@@ -2079,6 +2109,7 @@ function bindEvents(){
     else if(action==="location-view-stats") { const loc = document.getElementById("locationSelectHome").value; if(!loc){ showToast("Pick a court first"); return; } await openLocation(loc); }
     else if(action==="go-leaderboard") await openLeaderboard();
     else if(action==="go-h2h") openH2H();
+    else if(action==="go-sessions") await openSessionViewer();
     else if(action==="run-h2h") await runH2H();
     else if(action==="set-leaderboard-scope") { state.leaderboardScope = el.dataset.scope; render(); }
     else if(action==="compute-ratings") await computeAllSessionRatings();
@@ -2360,6 +2391,29 @@ async function adminLogoutHandler(){
   try{ await sbClient.auth.signOut(); }catch(e){}
   state.adminUser = null;
   state.adminSessions = null;
+  render();
+}
+async function openSessionViewer(){
+  stopPolling();
+  state.route = "sessions"; state.loading = true; render();
+  try{
+    const { data, error } = await sbClient.from("kv_store").select("key,value,updated_at").like("key","tourney-%").order("updated_at",{ascending:false}).limit(200);
+    if(error){ throw error; }
+    state.sessionViewerList = (data||[]).map(row=>{
+      let t=null; try{ t = JSON.parse(row.value); }catch(e){}
+      if(!t) return null;
+      return {
+        code: t.code, location: t.location, date: t.date,
+        format: formatLabel(t),
+        matchType: t.matchType==="doubles"?"Doubles":t.matchType==="mixer"?"Doubles (rotating)":"Singles"
+      };
+    }).filter(Boolean);
+  }catch(e){
+    console.error("openSessionViewer failed", e);
+    state.sessionViewerList = [];
+    showToast("Couldn't load sessions");
+  }
+  state.loading = false;
   render();
 }
 async function loadAdminSessions(){
