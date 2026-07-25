@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Kitchen Line — Sri Lanka Pickleball</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Anton&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -29,7 +29,7 @@
     font-family:'Manrope',sans-serif;
     min-height:100vh;
   }
-  .display{font-family:'Anton',sans-serif; letter-spacing:0.02em; text-transform:uppercase;}
+  .display{font-family:'Oswald',sans-serif; font-weight:600; letter-spacing:0.02em; text-transform:uppercase;}
   .mono{font-family:'JetBrains Mono',monospace;}
   #app{max-width:900px; margin:0 auto; padding:0 16px 80px;}
 
@@ -40,7 +40,7 @@
   }
   .brand{display:flex; align-items:center; gap:10px; cursor:pointer;}
   .brand .dot{width:14px; height:14px; border-radius:50%; background:var(--ball); border:2px solid var(--ink);}
-  .brand span{font-family:'Anton',sans-serif; font-size:22px; letter-spacing:0.03em; text-transform:uppercase;}
+  .brand span{font-family:'Oswald',sans-serif; font-weight:600; font-size:22px; letter-spacing:0.03em; text-transform:uppercase;}
   .brand small{display:block; font-size:10px; letter-spacing:0.14em; color:var(--muted); font-weight:600; text-transform:uppercase; margin-top:-2px;}
 
   /* ---- court line divider ---- */
@@ -69,7 +69,7 @@
   }
   .hero .court-svg{position:absolute; right:-40px; bottom:-40px; opacity:0.16; width:220px;}
   .hero h1{
-    font-family:'Anton',sans-serif; font-size:44px; line-height:0.98; margin:0 0 12px; text-transform:uppercase;
+    font-family:'Oswald',sans-serif; font-weight:600; font-size:44px; line-height:0.98; margin:0 0 12px; text-transform:uppercase;
     max-width:520px;
   }
   .hero h1 em{font-style:normal; color:var(--ball);}
@@ -97,7 +97,7 @@
     background:var(--kitchen); border:2px solid var(--ink); border-radius:18px;
     padding:24px; margin-bottom:20px;
   }
-  .card h2{font-family:'Anton',sans-serif; font-size:22px; text-transform:uppercase; margin:0 0 4px;}
+  .card h2{font-family:'Oswald',sans-serif; font-weight:600; font-size:22px; text-transform:uppercase; margin:0 0 4px;}
   .card .sub{color:var(--muted); font-size:13px; margin:0 0 18px; font-weight:600;}
   .eyebrow{font-size:11px; font-weight:800; letter-spacing:0.14em; text-transform:uppercase; color:var(--court); margin:0 0 6px;}
 
@@ -159,7 +159,7 @@
   tr.leader td{background:rgba(215,230,57,0.35);}
 
   .group-block{border:2px solid var(--line); border-radius:14px; padding:16px; margin-bottom:16px; background:#fff;}
-  .group-block h3{font-family:'Anton',sans-serif; font-size:16px; margin:0 0 10px; text-transform:uppercase; color:var(--court);}
+  .group-block h3{font-family:'Oswald',sans-serif; font-weight:600; font-size:16px; margin:0 0 10px; text-transform:uppercase; color:var(--court);}
 
   .match-card{
     border:2px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; background:#fff;
@@ -181,24 +181,24 @@
     background:var(--ball); border:3px solid var(--ink); border-radius:16px; padding:20px; text-align:center; margin-bottom:20px;
   }
   .champion-banner .lbl{font-size:11px; font-weight:800; letter-spacing:0.14em; text-transform:uppercase;}
-  .champion-banner .name{font-family:'Anton',sans-serif; font-size:30px; text-transform:uppercase; margin-top:4px;}
+  .champion-banner .name{font-family:'Oswald',sans-serif; font-weight:600; font-size:30px; text-transform:uppercase; margin-top:4px;}
 
   .player-link{cursor:pointer; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;}
   .player-link:hover{color:var(--court);}
   .profile-head{display:flex; align-items:center; gap:14px; margin-bottom:6px;}
-  .profile-avatar{width:52px; height:52px; border-radius:50%; background:var(--ball); border:2px solid var(--ink); display:flex; align-items:center; justify-content:center; font-family:'Anton',sans-serif; font-size:20px;}
+  .profile-avatar{width:52px; height:52px; border-radius:50%; background:var(--ball); border:2px solid var(--ink); display:flex; align-items:center; justify-content:center; font-family:'Oswald',sans-serif; font-weight:600; font-size:20px;}
   .stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0;}
   .stat-grid.cols-6{grid-template-columns:repeat(6,1fr);}
   .stat-grid.cols-5{grid-template-columns:repeat(5,1fr);}
   .stat-grid.cols-3{grid-template-columns:repeat(3,1fr);}
   .stat-tile{background:#fff; border:2px solid var(--line); border-radius:12px; padding:12px; text-align:center;}
-  .stat-tile .num{font-family:'Anton',sans-serif; font-size:24px;}
+  .stat-tile .num{font-family:'Oswald',sans-serif; font-weight:600; font-size:24px;}
   .stat-tile .lbl{font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); font-weight:700;}
   .history-row{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); font-size:13px; font-weight:600;}
   .history-row .loc{font-weight:800;}
   .history-row .rec{color:var(--court); font-weight:800;}
   .category-block{border:2px solid var(--ink); border-radius:16px; padding:20px; margin-bottom:20px; background:var(--kitchen);}
-  .category-block h3{font-family:'Anton',sans-serif; font-size:20px; text-transform:uppercase; margin:0 0 4px;}
+  .category-block h3{font-family:'Oswald',sans-serif; font-weight:600; font-size:20px; text-transform:uppercase; margin:0 0 4px;}
   .highlight-pair{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0;}
   .highlight-card{background:#fff; border:2px solid var(--line); border-radius:12px; padding:12px;}
   .highlight-card.best{border-color:var(--court);}
@@ -206,7 +206,7 @@
   .highlight-card .tag{font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.05em;}
   .highlight-card.best .tag{color:var(--court);}
   .highlight-card.rival .tag{color:var(--red);}
-  .highlight-card .who{font-family:'Anton',sans-serif; font-size:17px; margin:4px 0 2px;}
+  .highlight-card .who{font-family:'Oswald',sans-serif; font-weight:600; font-size:17px; margin:4px 0 2px;}
   .highlight-card .rec{font-size:12px; font-weight:700; color:var(--muted);}
   .streak-row{display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 4px;}
   .streak-badge{background:#fff; border:2px solid var(--line); border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:800;}
@@ -218,7 +218,7 @@
   .rating-row{border:2px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:8px; background:#fff; cursor:pointer;}
   .rating-row-head{display:flex; justify-content:space-between; align-items:center;}
   .rating-name{font-weight:800; font-size:14px;}
-  .rating-badge{font-family:'Anton',sans-serif; font-size:16px; display:flex; align-items:center; gap:8px;}
+  .rating-badge{font-family:'Oswald',sans-serif; font-weight:600; font-size:16px; display:flex; align-items:center; gap:8px;}
   .rating-label{font-family:'Manrope',sans-serif; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted);}
   .rating-detail{margin-top:10px; padding-top:10px; border-top:1px solid var(--line); display:grid; grid-template-columns:1fr 1fr; gap:6px 16px;}
   .rating-comp{display:flex; justify-content:space-between; font-size:12.5px; font-weight:700;}
@@ -227,11 +227,11 @@
   .rc-card{width:640px; padding:44px; background:var(--court); background-image: radial-gradient(circle at 85% -10%, rgba(215,230,57,0.25), transparent 45%); color:var(--kitchen); font-family:'Manrope',sans-serif;}
   .rc-brand{display:flex; align-items:center; gap:8px; margin-bottom:28px;}
   .rc-brand .dot{width:12px; height:12px; border-radius:50%; background:var(--ball); border:2px solid var(--kitchen);}
-  .rc-brand span{font-family:'Anton',sans-serif; font-size:18px; text-transform:uppercase; letter-spacing:0.03em;}
-  .rc-loc{font-family:'Anton',sans-serif; font-size:34px; text-transform:uppercase; line-height:1.05; margin:0 0 6px;}
+  .rc-brand span{font-family:'Oswald',sans-serif; font-weight:600; font-size:18px; text-transform:uppercase; letter-spacing:0.03em;}
+  .rc-loc{font-family:'Oswald',sans-serif; font-weight:600; font-size:34px; text-transform:uppercase; line-height:1.05; margin:0 0 6px;}
   .rc-meta{font-size:13px; color:#DCEDEA; font-weight:700; margin-bottom:22px;}
   .rc-champ-lbl{font-size:11px; font-weight:800; letter-spacing:0.16em; text-transform:uppercase; color:var(--ball); margin-bottom:6px;}
-  .rc-champ-name{font-family:'Anton',sans-serif; font-size:40px; text-transform:uppercase; line-height:1.05; margin-bottom:24px;}
+  .rc-champ-name{font-family:'Oswald',sans-serif; font-weight:600; font-size:40px; text-transform:uppercase; line-height:1.05; margin-bottom:24px;}
   .rc-rating{font-size:14px; font-weight:800; color:var(--ball); background:rgba(0,0,0,0.18); display:inline-block; padding:8px 14px; border-radius:10px; margin-bottom:20px;}
   .rc-standings{background:rgba(251,248,240,0.1); border-radius:14px; padding:16px 20px; margin-bottom:22px;}
   .rc-standings-row{display:flex; justify-content:space-between; padding:6px 0; font-size:14px; font-weight:700; border-bottom:1px solid rgba(255,255,255,0.14);}
