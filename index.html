@@ -712,12 +712,12 @@ async function computeKitchenRating(t, name, cache){
 }
 function renderPredictionsToggle(){
   if(state.matchPredictions){
-    return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, hidden fairness scores, and head-to-head record.</p>`;
+    return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, and head-to-head record.</p>`;
   }
   return `
     <div class="card">
       <p class="eyebrow">Predictions</p>
-      <p class="sub" style="margin-top:0;">See an estimated win chance and predicted scoreline for every unplayed match, based on rating history, DUPR, hidden fairness scores, and head-to-head record.</p>
+      <p class="sub" style="margin-top:0;">See an estimated win chance and predicted scoreline for every unplayed match, based on rating history, DUPR, and head-to-head record.</p>
       <button class="btn btn-outline btn-sm" data-action="compute-predictions">Show win predictions</button>
     </div>`;
 }
