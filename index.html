@@ -1185,9 +1185,10 @@ function roundRobinPairs(participants){
   }
   return rounds;
 }
-function generateMixerRounds(players){
+function generateMixerRounds(players, ratingsMap){
   // players: [{name,dupr}] -> rotates partners each round (round-robin partner schedule),
   // then pairs the resulting teams against each other within the round.
+  ratingsMap = ratingsMap || {};
   const participants = players.map((p,i)=>({id:"mp-"+i, label:p.name, dupr:p.dupr}));
   const partnerRounds = roundRobinPairs(participants);
   return partnerRounds.map((teamsRaw, ri)=>{
@@ -1195,14 +1196,25 @@ function generateMixerRounds(players){
     const byePair = teamsRaw.find(pair=>pair[0].bye||pair[1].bye);
     const sitOut = [];
     if(byePair) sitOut.push(byePair[0].bye ? byePair[1].label : byePair[0].label);
-    let teams = realPairs.map((pair,ti)=>({
-      id:"team-r"+ri+"-"+ti, label:pair[0].label+" & "+pair[1].label, players:[pair[0].label, pair[1].label]
-    }));
-    teams = shuffle(teams);
+    let teams = realPairs.map((pair,ti)=>{
+      const r1 = ratingsMap[pair[0].label], r2 = ratingsMap[pair[1].label];
+      const hasRating = r1!=null || r2!=null;
+      const strength = ((r1!=null?r1:50) + (r2!=null?r2:50)) / 2;
+      return {
+        id:"team-r"+ri+"-"+ti, label:pair[0].label+" & "+pair[1].label, players:[pair[0].label, pair[1].label],
+        _strength: strength, _hasRating: hasRating
+      };
+    });
+    // If any player in this round has a hidden fairness rating, pair the closest-strength teams
+    // against each other for a more competitive game; otherwise fall back to a random pairing.
+    const anyRatingsKnown = teams.some(x=>x._hasRating);
+    teams = anyRatingsKnown ? teams.slice().sort((a,b)=>a._strength-b._strength) : shuffle(teams);
     const matches=[]; let idx=0;
     while(teams.length-idx>=2){
-      const a=teams[idx], b=teams[idx+1];
-      matches.push({id:"mx-"+ri+"-"+(idx/2), round:ri+1, a, b, scoreA:null, scoreB:null, winner:null, isBye:false});
+      const aTeam=teams[idx], bTeam=teams[idx+1];
+      const aClean = {id:aTeam.id, label:aTeam.label, players:aTeam.players};
+      const bClean = {id:bTeam.id, label:bTeam.label, players:bTeam.players};
+      matches.push({id:"mx-"+ri+"-"+(idx/2), round:ri+1, a:aClean, b:bClean, scoreA:null, scoreB:null, winner:null, isBye:false});
       idx+=2;
     }
     if(teams.length-idx===1) sitOut.push(...teams[idx].players);
@@ -1309,20 +1321,25 @@ function fillRoundRobinToTarget(participants, targetGames){
   }
   return matches;
 }
-function fillMixerToTarget(players, targetGames){
-  if(players.length<4) return generateMixerRounds(players);
-  let rounds = generateMixerRounds(shuffle(players));
+function fillMixerToTarget(players, targetGames, ratingsMap){
+  if(players.length<4) return generateMixerRounds(players, ratingsMap);
+  let rounds = generateMixerRounds(shuffle(players), ratingsMap);
   let realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
   let cycle = 1;
   while(realCount < targetGames && cycle < 10){
     const maxRound = rounds.length ? Math.max(...rounds.map(r=>r.round)) : 0;
-    const extra = generateMixerRounds(shuffle(players));
+    const extra = generateMixerRounds(shuffle(players), ratingsMap);
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-c"+cycle; }); });
     rounds = rounds.concat(extra);
     realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
     cycle++;
   }
   return rounds;
+}
+function buildFairnessMap(){
+  const map = {};
+  state.playerDb.forEach(p=>{ if(p.fairness!=null) map[p.name] = p.fairness; });
+  return map;
 }
 function recommendedMaxMatches(duration, gameLen, courts){
   return Math.max(1, Math.floor(duration/gameLen) * courts);
@@ -2199,6 +2216,17 @@ function renderAdminDashboard(){
         </div>
       `).join("") : `<p class="help">No players yet.</p>`}
     </div>
+    <div class="card" style="border-color:var(--ink); background:var(--kitchen);">
+      <p class="eyebrow">Hidden fairness ratings (admin only)</p>
+      <p class="sub" style="margin-top:0;">A private 0-100 rating you set for matchmaking balance only &mdash; never shown to players or viewers anywhere in the app. When set, rotating-partner (mixer) doubles pairs the two closest-rated teams against each other each round instead of a random draw, to cut down on lopsided games. Leave blank for players you don't want to rate &mdash; unrated players default to neutral and don't skew anyone else's pairing.</p>
+      ${state.playerDb.length ? state.playerDb.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`
+        <div class="player-add-row">
+          <div class="field" style="flex:2;"><label style="text-transform:none; letter-spacing:0; font-size:14px;">${p.name}</label></div>
+          <div class="field dupr"><input type="text" class="admin-fairness-input" data-name="${p.name}" value="${p.fairness!=null?p.fairness:""}" placeholder="0-100"></div>
+          <button class="btn btn-ink btn-sm" data-action="admin-save-fairness" data-name="${p.name}" style="height:44px;">Save</button>
+        </div>
+      `).join("") : `<p class="help">No players yet.</p>`}
+    </div>
     <div class="card">
       <p class="eyebrow">All sessions (${sessions?sessions.length:0})</p>
       ${!sessions || !sessions.length ? `<p class="help">No sessions found.</p>` : sessions.map(s=>`
@@ -2429,7 +2457,7 @@ async function addPlayerToSession(){
     });
   } else if(t.format==="mixer"){
     const fullList = t.participants.map(p=>({name:p.label, dupr:p.dupr}));
-    const extra = generateMixerRounds(shuffle(fullList));
+    const extra = generateMixerRounds(shuffle(fullList), buildFairnessMap());
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-add"+Date.now(); }); });
     assignCourts(extra, t.courts);
@@ -2554,6 +2582,7 @@ function bindEvents(){
     else if(action==="admin-delete-session") await adminDeleteSession(el.dataset.key);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
+    else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
     else if(action==="admin-add-player") await adminAddPlayer();
   };
 }
@@ -2683,7 +2712,7 @@ async function addMoreGames(){
   const t = state.tournament;
   if(t.format==="mixer"){
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
-    const extra = generateMixerRounds(shuffle(t.participants.map(p=>({name:p.label, dupr:p.dupr}))));
+    const extra = generateMixerRounds(shuffle(t.participants.map(p=>({name:p.label, dupr:p.dupr}))), buildFairnessMap());
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-x"+maxRound; }); });
     assignCourts(extra, t.courts);
     t.mixerRounds = t.mixerRounds.concat(extra);
@@ -2932,6 +2961,24 @@ async function adminSaveDupr(name){
   showToast(`Updated ${name}'s DUPR`);
   render();
 }
+async function adminSaveFairness(name){
+  const inputs = document.querySelectorAll(".admin-fairness-input");
+  let el = null;
+  inputs.forEach(inp => { if(inp.dataset.name === name) el = inp; });
+  if(!el) return;
+  const val = el.value.trim();
+  const fVal = val === "" ? null : parseInt(val, 10);
+  if(val !== "" && (isNaN(fVal) || fVal<0 || fVal>100)){ showToast("Enter a whole number 0-100, or leave blank"); return; }
+  const raw = await storeGet(PLAYER_DB_KEY, true);
+  let db = []; try{ db = raw ? JSON.parse(raw) : []; }catch(e){ db = []; }
+  const idx = db.findIndex(p=>p.name===name);
+  if(idx<0){ showToast("Player not found"); return; }
+  db[idx].fairness = fVal;
+  await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
+  state.playerDb = db;
+  showToast(`Updated ${name}'s fairness rating`);
+  render();
+}
 
 async function openProfile(name){
   if(!name){ showToast("Enter a player name"); return; }
@@ -3125,7 +3172,7 @@ async function buildTournament(){
   const targetGames = recommendedMaxMatches(f.duration, f.gameLen, f.courts);
 
   if(effectiveFormat==="mixer"){
-    tournament.mixerRounds = fillMixerToTarget(f.players, targetGames);
+    tournament.mixerRounds = fillMixerToTarget(f.players, targetGames, buildFairnessMap());
     assignCourts(tournament.mixerRounds, f.courts);
   } else if(effectiveFormat==="roundrobin"){
     tournament.matches = fillRoundRobinToTarget(participants, targetGames);
