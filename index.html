@@ -1428,32 +1428,59 @@ function propagateBracket(rounds){
     });
   }
 }
+function groupMatchesByRound(matches){
+  const byRound = {};
+  matches.forEach(m=>{ (byRound[m.round]=byRound[m.round]||[]).push(m); });
+  return Object.keys(byRound).sort((a,b)=>a-b).map(k=>byRound[k]);
+}
 function fillRoundRobinToTarget(participants, targetGames){
   if(participants.length<2) return generateRoundRobin(participants);
-  let matches = generateRoundRobin(participants);
-  let realCount = matches.filter(m=>!m.isBye).length;
-  let cycle = 1;
+  let allMatches = [];
+  let realCount = 0;
+  let cycle = 0;
   while(realCount < targetGames && cycle < 10){
-    const maxRound = matches.length ? Math.max(...matches.map(m=>m.round)) : 0;
-    const extra = generateRoundRobin(participants);
-    extra.forEach(m=>{ m.round += maxRound; m.id = m.id+"-c"+cycle; });
-    matches = matches.concat(extra);
-    realCount = matches.filter(m=>!m.isBye).length;
+    const cycleMatches = generateRoundRobin(participants);
+    const maxRound = allMatches.length ? Math.max(...allMatches.map(m=>m.round)) : 0;
+    const roundsGrouped = groupMatchesByRound(cycleMatches);
+    for(const roundMatches of roundsGrouped){
+      if(realCount >= targetGames) break;
+      const newRoundNum = roundMatches[0].round + maxRound;
+      const byes = roundMatches.filter(m=>m.isBye);
+      let real = roundMatches.filter(m=>!m.isBye);
+      const remaining = targetGames - realCount;
+      if(real.length > remaining) real = real.slice(0, remaining);
+      const finalRoundMatches = real.concat(byes);
+      finalRoundMatches.forEach(m=>{ m.round = newRoundNum; m.id = m.id+"-c"+cycle; });
+      allMatches = allMatches.concat(finalRoundMatches);
+      realCount += real.length;
+    }
     cycle++;
   }
-  return matches;
+  return allMatches;
 }
 function fillMixerToTarget(players, targetGames, ratingsMap){
   if(players.length<4) return generateMixerRounds(players, ratingsMap);
-  let rounds = generateMixerRounds(shuffle(players), ratingsMap);
-  let realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
-  let cycle = 1;
+  let rounds = [];
+  let realCount = 0;
+  let cycle = 0;
   while(realCount < targetGames && cycle < 10){
+    const cycleRounds = generateMixerRounds(shuffle(players), ratingsMap);
     const maxRound = rounds.length ? Math.max(...rounds.map(r=>r.round)) : 0;
-    const extra = generateMixerRounds(shuffle(players), ratingsMap);
-    extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-c"+cycle; }); });
-    rounds = rounds.concat(extra);
-    realCount = rounds.reduce((s,r)=>s+r.matches.length,0);
+    for(const r of cycleRounds){
+      if(realCount >= targetGames) break;
+      const newRoundNum = r.round + maxRound;
+      let matches = r.matches;
+      const sitOut = r.sitOut.slice();
+      const remaining = targetGames - realCount;
+      if(matches.length > remaining){
+        const dropped = matches.slice(remaining);
+        matches = matches.slice(0, remaining);
+        dropped.forEach(m=>{ sitOut.push(...m.a.players, ...m.b.players); });
+      }
+      matches.forEach(m=>{ m.round = newRoundNum; m.id = m.id+"-c"+cycle; });
+      rounds.push({round:newRoundNum, matches, sitOut});
+      realCount += matches.length;
+    }
     cycle++;
   }
   return rounds;
