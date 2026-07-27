@@ -174,6 +174,7 @@
   }
   .match-card.done{border-color:var(--court); background:rgba(14,92,85,0.05);}
   .match-card.bye{opacity:0.5;}
+  .court-tag{background:var(--ball); color:var(--ink); font-size:10px; font-weight:800; padding:3px 9px; border-radius:999px; text-transform:uppercase; letter-spacing:0.04em; flex:0 0 auto;}
   .side{font-weight:800; font-size:13.5px; flex:1; min-width:110px;}
   .side.win{color:var(--court);}
   .score-inputs{display:flex; align-items:center; gap:6px;}
@@ -1135,6 +1136,23 @@ function shuffle(arr){
   for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
   return a;
 }
+function assignCourts(roundGroups, numCourts){
+  const n = Math.max(1, numCourts||1);
+  roundGroups.forEach(group=>{
+    const matches = Array.isArray(group) ? group : group.matches;
+    let idx=0;
+    matches.forEach(m=>{
+      if(m.isBye || !m.a || !m.b) return;
+      m.court = (idx % n) + 1;
+      idx++;
+    });
+  });
+}
+function assignCourtsToFlatMatches(matches, numCourts){
+  const byRound = {};
+  matches.forEach(m=>{ (byRound[m.round]=byRound[m.round]||[]).push(m); });
+  assignCourts(Object.values(byRound), numCourts);
+}
 function generateRoundRobin(participants){
   let arr = participants.slice();
   if(arr.length%2!==0) arr.push({id:"BYE-"+Math.random().toString(36).slice(2,6), label:"Bye", bye:true});
@@ -1741,6 +1759,7 @@ function renderView(){
       <div class="code-pill">${t.code}</div>
     </div>
     ${canAddMore ? `<button class="btn btn-outline btn-sm" data-action="add-more-games" style="margin-bottom:14px;">+ Add another round of games</button>` : ""}
+    ${!ended && t.format!=="groups" ? renderAddPlayerToSession(t) : ""}
     ${champion ? `<div class="champion-banner"><div class="lbl">🏆 ${championStatusLabel}</div><div class="name">${champion.label}</div></div>` : ""}
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
     ${renderAchievements(t)}
@@ -2152,6 +2171,15 @@ function renderAdminDashboard(){
       </div>
     </div>
     <div class="card">
+      <p class="eyebrow">Add a player</p>
+      <p class="sub" style="margin-top:0;">Adds them to the shared list so they're ready to pick next time a session is created.</p>
+      <div class="player-add-row">
+        <div class="field"><label>Player name</label><input type="text" id="admin-add-name" placeholder="e.g. New Player"></div>
+        <div class="field dupr"><label>DUPR</label><input type="text" id="admin-add-dupr" placeholder="3.5"></div>
+        <button class="btn btn-ink btn-sm" data-action="admin-add-player" style="height:44px;">Add</button>
+      </div>
+    </div>
+    <div class="card">
       <p class="eyebrow">Clean up shared player list</p>
       <div class="join-row">
         <input type="text" id="admin-remove-player" list="playerNamesHome" placeholder="Player name to remove" style="text-transform:none; font-family:'Manrope',sans-serif;">
@@ -2251,14 +2279,16 @@ function renderMatchCard(m, t, ctx, editable){
     return `<div class="match-card bye"><div class="side">TBD</div><div class="side">TBD</div></div>`;
   }
   const done = m.scoreA!=null && m.scoreB!=null;
-  const editablePlayers = editable && !done && (effectiveCtx==="mx" || effectiveCtx==="rr");
+  const editablePlayers = editable && (effectiveCtx==="mx" || effectiveCtx==="rr");
   if(editablePlayers && state.editingMatchId===m.id){
     return renderMatchEditForm(m, t, effectiveCtx);
   }
   const aWin = done && m.winner===m.a.id, bWin = done && m.winner===m.b.id;
+  const courtTag = m.court ? `<span class="court-tag">Court ${m.court}</span>` : "";
   if(!editable){
     return `
       <div class="match-card ${done?"done":""}">
+        ${courtTag}
         <div class="side ${aWin?"win":""}">${m.a.label}</div>
         <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">${done?`${m.scoreA} – ${m.scoreB}`:"—"}</div>
         <div class="side ${bWin?"win":""}" style="text-align:right;">${m.b.label}</div>
@@ -2266,6 +2296,7 @@ function renderMatchCard(m, t, ctx, editable){
   }
   return `
     <div class="match-card ${done?"done":""}">
+      ${courtTag}
       <div class="side ${aWin?"win":""}">${m.a.label}</div>
       <div class="score-inputs">
         <input type="number" min="0" data-mid="${m.id}" data-side="a" data-ctx="${effectiveCtx}" value="${m.scoreA!=null?m.scoreA:""}">
@@ -2315,8 +2346,27 @@ function renderMatchEditForm(m, t, ctx){
     </div>`;
 }
 
+function renderAddPlayerToSession(t){
+  const note = t.format==="roundrobin"
+    ? "They'll get a match scheduled against everyone already in the session."
+    : t.format==="mixer"
+    ? "They'll join the rotation \u2014 a new round gets added so they partner with everyone."
+    : "They'll be selectable next time you add a match.";
+  return `
+    <div class="card">
+      <p class="eyebrow">Add a player</p>
+      <p class="sub" style="margin-top:0;">${note}</p>
+      <div class="player-add-row">
+        <div class="field"><label>Player name</label><input type="text" id="addp-name" list="addp-namelist" placeholder="e.g. New Player"></div>
+        <datalist id="addp-namelist">${state.playerDb.map(p=>`<option value="${p.name}">`).join("")}</datalist>
+        <div class="field dupr"><label>DUPR</label><input type="text" id="addp-dupr" placeholder="3.5"></div>
+        <button class="btn btn-ink btn-sm" data-action="add-player-to-session" style="height:44px;">Add</button>
+      </div>
+    </div>`;
+}
 function renderFreeplayAddMatch(t){
   const opts = t.participants.map(p=>`<option value="${p.label}">${p.label}</option>`).join("");
+  const courtField = t.courts>1 ? `<div class="field"><label>Court</label><select id="fp-court">${Array.from({length:t.courts},(_,i)=>i+1).map(c=>`<option value="${c}">Court ${c}</option>`).join("")}</select></div>` : "";
   if(t.freeplayMode==="singles"){
     return `
       <div class="card">
@@ -2329,6 +2379,7 @@ function renderFreeplayAddMatch(t){
         <div class="row">
           <div class="field"><label>Score A</label><input type="number" id="fp-scoreA" min="0"></div>
           <div class="field"><label>Score B</label><input type="number" id="fp-scoreB" min="0"></div>
+          ${courtField}
         </div>
         <button class="btn btn-ink btn-wide" data-action="add-freeplay-match">Add match</button>
       </div>`;
@@ -2348,9 +2399,51 @@ function renderFreeplayAddMatch(t){
       <div class="row">
         <div class="field"><label>Score A</label><input type="number" id="fp-scoreA" min="0"></div>
         <div class="field"><label>Score B</label><input type="number" id="fp-scoreB" min="0"></div>
+        ${courtField}
       </div>
       <button class="btn btn-ink btn-wide" data-action="add-freeplay-match">Add match</button>
     </div>`;
+}
+async function addPlayerToSession(){
+  const t = state.tournament;
+  const nameEl = document.getElementById("addp-name");
+  const duprEl = document.getElementById("addp-dupr");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Enter a player name"); return; }
+  const already = t.participants.some(p=> p.label===name || (p.players && p.players.includes(name)));
+  if(already){ showToast(`${name} is already in this session`); return; }
+  const duprVal = duprEl.value.trim();
+  const dupr = duprVal ? parseFloat(duprVal) : null;
+
+  const priorParticipants = t.participants.slice();
+  const newParticipant = {id:"p-add-"+Date.now(), label:name, dupr};
+  t.participants.push(newParticipant);
+
+  if(t.format==="roundrobin"){
+    const maxRound = t.matches.length ? Math.max(...t.matches.map(m=>m.round)) : 0;
+    let i=0;
+    priorParticipants.forEach(p=>{
+      if(p.bye) return;
+      i++;
+      t.matches.push({id:"add-"+Date.now()+"-"+i, round:maxRound+1, a:newParticipant, b:p, scoreA:null, scoreB:null, winner:null, isBye:false});
+    });
+  } else if(t.format==="mixer"){
+    const fullList = t.participants.map(p=>({name:p.label, dupr:p.dupr}));
+    const extra = generateMixerRounds(shuffle(fullList));
+    const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
+    extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-add"+Date.now(); }); });
+    assignCourts(extra, t.courts);
+    t.mixerRounds = t.mixerRounds.concat(extra);
+  }
+  // freeplay: no auto-scheduling needed — they're simply now selectable in "Add a match"
+
+  await saveTournament(t);
+  await upsertPlayers([{name, dupr}]);
+  await addToPlayerIndex(name, t.code);
+  state.playerDb = await loadPlayerDb();
+  state.kitchenRatings = null; state.expandedRating = null;
+  render();
+  showToast(`${name} added to the session`);
 }
 async function addFreeplayMatch(){
   const t = state.tournament;
@@ -2377,12 +2470,14 @@ async function addFreeplayMatch(){
   }
 
   const winner = scoreA>scoreB ? aObj.id : bObj.id;
+  const courtEl = document.getElementById("fp-court");
+  const court = courtEl ? +courtEl.value : 1;
 
   if(t.freeplayMode==="singles"){
-    const match = {id:"fp-"+Date.now(), round:t.matches.length+1, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false};
+    const match = {id:"fp-"+Date.now(), round:t.matches.length+1, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false, court};
     t.matches.push(match);
   } else {
-    const match = {id:"fp-"+Date.now(), round:t.mixerRounds[0].matches.length+1, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false};
+    const match = {id:"fp-"+Date.now(), round:t.mixerRounds[0].matches.length+1, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false, court};
     t.mixerRounds[0].matches.push(match);
   }
 
@@ -2446,6 +2541,7 @@ function bindEvents(){
     else if(action==="compute-ratings") await computeAllSessionRatings();
     else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
     else if(action==="add-freeplay-match") await addFreeplayMatch();
+    else if(action==="add-player-to-session") await addPlayerToSession();
     else if(action==="remove-match") await handleRemoveMatch(el.dataset.mid, el.dataset.ctx);
     else if(action==="start-edit-match") { state.editingMatchId = el.dataset.mid; render(); }
     else if(action==="cancel-edit-match") { state.editingMatchId = null; render(); }
@@ -2458,6 +2554,7 @@ function bindEvents(){
     else if(action==="admin-delete-session") await adminDeleteSession(el.dataset.key);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
+    else if(action==="admin-add-player") await adminAddPlayer();
   };
 }
 
@@ -2588,17 +2685,20 @@ async function addMoreGames(){
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
     const extra = generateMixerRounds(shuffle(t.participants.map(p=>({name:p.label, dupr:p.dupr}))));
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-x"+maxRound; }); });
+    assignCourts(extra, t.courts);
     t.mixerRounds = t.mixerRounds.concat(extra);
   } else if(t.format==="roundrobin"){
     const maxRound = t.matches.length ? Math.max(...t.matches.map(m=>m.round)) : 0;
     const extra = generateRoundRobin(t.participants);
     extra.forEach(m=>{ m.round+=maxRound; m.id=m.id+"-x"+maxRound; });
+    assignCourtsToFlatMatches(extra, t.courts);
     t.matches = t.matches.concat(extra);
   } else if(t.format==="groups" && !t.bracket){
     t.groups.forEach(g=>{
       const maxRound = g.matches.length ? Math.max(...g.matches.map(m=>m.round)) : 0;
       const extra = generateRoundRobin(g.participants);
       extra.forEach(m=>{ m.round+=maxRound; m.id=m.id+"-x"+maxRound; });
+      assignCourtsToFlatMatches(extra, t.courts);
       g.matches = g.matches.concat(extra);
     });
   } else {
@@ -2794,6 +2894,24 @@ async function adminRemovePlayer(name){
   await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
   state.playerDb = db;
   showToast(`Removed ${name} from the shared player list`);
+  render();
+}
+async function adminAddPlayer(){
+  const nameEl = document.getElementById("admin-add-name");
+  const duprEl = document.getElementById("admin-add-dupr");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Enter a player name"); return; }
+  const duprVal = duprEl.value.trim();
+  const dupr = duprVal ? parseFloat(duprVal) : null;
+  if(duprVal && (isNaN(dupr) || dupr<1 || dupr>8)){ showToast("Enter a valid DUPR (1.0–8.0) or leave blank"); return; }
+  const raw = await storeGet(PLAYER_DB_KEY, true);
+  let db = []; try{ db = raw ? JSON.parse(raw) : []; }catch(e){ db = []; }
+  if(db.some(p=>p.name.toLowerCase()===name.toLowerCase())){ showToast("That player already exists — edit their DUPR below instead"); return; }
+  db.push({name, dupr});
+  await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
+  state.playerDb = db;
+  nameEl.value = ""; duprEl.value = "";
+  showToast(`Added ${name}`);
   render();
 }
 async function adminSaveDupr(name){
@@ -3008,8 +3126,10 @@ async function buildTournament(){
 
   if(effectiveFormat==="mixer"){
     tournament.mixerRounds = fillMixerToTarget(f.players, targetGames);
+    assignCourts(tournament.mixerRounds, f.courts);
   } else if(effectiveFormat==="roundrobin"){
     tournament.matches = fillRoundRobinToTarget(participants, targetGames);
+    assignCourtsToFlatMatches(tournament.matches, f.courts);
   } else if(effectiveFormat==="freeplay"){
     tournament.freeplayMode = f.matchType==="singles" ? "singles" : "doubles";
     if(tournament.freeplayMode==="singles"){
@@ -3020,7 +3140,7 @@ async function buildTournament(){
   } else {
     tournament.groups = makeGroups(participants, f.groupSize);
     const perGroupTarget = Math.max(1, Math.round(targetGames / tournament.groups.length));
-    tournament.groups.forEach(g=>{ g.matches = fillRoundRobinToTarget(g.participants, perGroupTarget); });
+    tournament.groups.forEach(g=>{ g.matches = fillRoundRobinToTarget(g.participants, perGroupTarget); assignCourtsToFlatMatches(g.matches, f.courts); });
     tournament.bracket = null;
   }
 
@@ -3048,6 +3168,7 @@ async function startKnockout(){
   });
   qualifiers = shuffle(qualifiers); // light shuffle so same-group pairs aren't guaranteed to meet immediately after seeding order
   t.bracket = makeBracket(qualifiers);
+  assignCourts(t.bracket, t.courts);
   await saveTournament(t);
   haptic("medium");
   render();
@@ -3063,6 +3184,7 @@ async function handleSaveScore(mid, ctx){
 
   let match = findMatch(t, mid, ctx);
   if(!match) return;
+  const wasAlreadyScored = match.scoreA!=null && match.scoreB!=null;
   match.scoreA = sa; match.scoreB = sb;
   match.winner = sa>sb ? match.a.id : match.b.id;
   haptic("light");
@@ -3070,8 +3192,9 @@ async function handleSaveScore(mid, ctx){
   if(ctx==="ko") propagateBracket(t.bracket);
 
   await saveTournament(t);
+  state.kitchenRatings = null; state.expandedRating = null;
   render();
-  showToast("Score saved");
+  showToast(wasAlreadyScored ? "Score updated" : "Score saved");
 }
 async function handleRemoveMatch(mid, ctx){
   const t = state.tournament;
@@ -3093,6 +3216,7 @@ async function handleRemoveMatch(mid, ctx){
   }
   await saveTournament(t);
   haptic("strong");
+  state.kitchenRatings = null; state.expandedRating = null;
   render();
   showToast("Match removed");
 }
@@ -3118,6 +3242,7 @@ async function saveEditMatch(mid, ctx){
 
   await saveTournament(t);
   state.editingMatchId = null;
+  state.kitchenRatings = null; state.expandedRating = null;
   render();
   showToast("Match updated");
 }
