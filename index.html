@@ -175,6 +175,7 @@
   .match-card.done{border-color:var(--court); background:rgba(14,92,85,0.05);}
   .match-card.bye{opacity:0.5;}
   .court-tag{background:var(--ball); color:var(--ink); font-size:10px; font-weight:800; padding:3px 9px; border-radius:999px; text-transform:uppercase; letter-spacing:0.04em; flex:0 0 auto;}
+  .predict-tag{flex:1 1 100%; font-size:11.5px; color:var(--court); font-weight:700;}
   .side{font-weight:800; font-size:13.5px; flex:1; min-width:110px;}
   .side.win{color:var(--court);}
   .score-inputs{display:flex; align-items:center; gap:6px;}
@@ -362,7 +363,8 @@ let state = {
   sessionViewerList: null,
   partnershipList: null,
   expandedPartnership: null,
-  profileReturnRoute: null
+  profileReturnRoute: null,
+  matchPredictions: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -708,6 +710,17 @@ async function computeKitchenRating(t, name, cache){
     label: ratingLabel(overall)
   };
 }
+function renderPredictionsToggle(){
+  if(state.matchPredictions){
+    return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, hidden fairness scores, and head-to-head record.</p>`;
+  }
+  return `
+    <div class="card">
+      <p class="eyebrow">Predictions</p>
+      <p class="sub" style="margin-top:0;">See an estimated win chance and predicted scoreline for every unplayed match, based on rating history, DUPR, hidden fairness scores, and head-to-head record.</p>
+      <button class="btn btn-outline btn-sm" data-action="compute-predictions">Show win predictions</button>
+    </div>`;
+}
 function renderKitchenRatings(t){
   const ratings = state.kitchenRatings;
   if(!ratings){
@@ -799,10 +812,119 @@ async function resolvePairStrength(name, cache){
   }
   return s;
 }
-function expectedWinProb(strengthA, strengthB){
+function expectedWinProb(strengthA, strengthB, scale){
+  scale = scale || 3;
   const diff = strengthA - strengthB;
-  const p = 1/(1+Math.pow(10, -diff/3));
+  const p = 1/(1+Math.pow(10, -diff/scale));
   return Math.max(0.05, Math.min(0.95, p));
+}
+/* ============================= MATCHUP WIN PREDICTIONS ============================= */
+async function teamKitchenStrength(players, cache){
+  const vals = [];
+  for(const name of players){
+    const s = await getPlayerStrengthHistory(name, cache);
+    if(s!=null) vals.push(s);
+  }
+  return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+}
+function teamDuprStrength(players){
+  const vals = players.map(n=>{
+    const p = state.playerDb.find(pp=>pp.name.toLowerCase()===n.toLowerCase());
+    return (p && p.dupr!=null) ? p.dupr : null;
+  }).filter(v=>v!=null);
+  return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+}
+function teamFairnessStrength(players){
+  const vals = players.map(n=>{
+    const p = state.playerDb.find(pp=>pp.name.toLowerCase()===n.toLowerCase());
+    return (p && p.fairness!=null) ? p.fairness : null;
+  }).filter(v=>v!=null);
+  return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+}
+async function computeGroupHeadToHead(teamAPlayers, teamBPlayers, cache){
+  let winsA=0, lossesA=0;
+  const seen = new Set();
+  for(const pa of teamAPlayers){
+    const codes = await getPlayerIndex(pa);
+    for(const code of codes.slice(0,25)){
+      let t = cache.tCache[code];
+      if(t===undefined){ t = await loadTournamentByCode(code); cache.tCache[code]=t; }
+      if(!t) continue;
+      collectAllMatches(t).forEach(m=>{
+        if(m.isBye || m.scoreA==null || m.scoreB==null || !m.a || !m.b) return;
+        const aPlayers = m.a.players || [m.a.label];
+        const bPlayers = m.b.players || [m.b.label];
+        const key = t.code+"-"+m.id;
+        if(seen.has(key)) return;
+        const paOnA = aPlayers.includes(pa), paOnB = bPlayers.includes(pa);
+        if(!paOnA && !paOnB) return;
+        const paSideOpponents = paOnA ? bPlayers : aPlayers;
+        if(!paSideOpponents.some(o=>teamBPlayers.includes(o))) return;
+        seen.add(key);
+        const paWon = paOnA ? m.winner===m.a.id : m.winner===m.b.id;
+        if(paWon) winsA++; else lossesA++;
+      });
+    }
+  }
+  return {winsA, lossesA, total: winsA+lossesA};
+}
+function expectedScoreline(favoredProb){
+  const diff = favoredProb - 0.5;
+  if(diff < 0.04) return {winner:13, loser:11};
+  if(diff < 0.09) return {winner:12, loser:10};
+  const loserScore = Math.max(1, Math.min(9, Math.round(11 - diff*20)));
+  return {winner:11, loser:loserScore};
+}
+async function computeMatchPrediction(m, cache){
+  const teamAPlayers = m.a.players || [m.a.label];
+  const teamBPlayers = m.b.players || [m.b.label];
+  const probs = [];
+  let h2hTotal = 0;
+
+  const krA = await teamKitchenStrength(teamAPlayers, cache);
+  const krB = await teamKitchenStrength(teamBPlayers, cache);
+  if(krA!=null && krB!=null) probs.push(expectedWinProb(krA, krB, 3));
+
+  const duprA = teamDuprStrength(teamAPlayers);
+  const duprB = teamDuprStrength(teamBPlayers);
+  if(duprA!=null && duprB!=null) probs.push(expectedWinProb(duprA, duprB, 1.2));
+
+  const fairA = teamFairnessStrength(teamAPlayers);
+  const fairB = teamFairnessStrength(teamBPlayers);
+  if(fairA!=null && fairB!=null) probs.push(expectedWinProb(fairA, fairB, 18));
+
+  const h2h = await computeGroupHeadToHead(teamAPlayers, teamBPlayers, cache);
+  if(h2h.total>0){
+    probs.push((h2h.winsA+1)/(h2h.total+2)); // smoothed toward 50% for small samples
+    h2hTotal = h2h.total;
+  }
+
+  if(!probs.length){
+    return { probA:0.5, probB:0.5, favored:"A", scoreline:{winner:13,loser:11}, confidence:"Low", signalsUsed:0 };
+  }
+  const probA = probs.reduce((a,b)=>a+b,0)/probs.length;
+  const probB = 1-probA;
+  const favored = probA>=probB ? "A" : "B";
+  const favoredProb = Math.max(probA, probB);
+  const scoreline = expectedScoreline(favoredProb);
+
+  let points = probs.length;
+  if(h2hTotal>=5) points++;
+  const confidence = points<=2 ? "Low" : points<=4 ? "Medium" : "High";
+
+  return { probA, probB, favored, scoreline, confidence, signalsUsed: probs.length };
+}
+async function computeMatchPredictions(){
+  const t = state.tournament;
+  showToast("Calculating matchups\u2026");
+  const cache = {tCache:{}, strength:{}, ratingCache:{}};
+  const predictions = {};
+  const matches = collectAllMatches(t).filter(m=>!m.isBye && m.a && m.b && m.a.id && m.b.id && m.scoreA==null && m.scoreB==null);
+  for(const m of matches){
+    predictions[m.id] = await computeMatchPrediction(m, cache);
+  }
+  state.matchPredictions = predictions;
+  render();
 }
 function partnershipTier(psi){
   if(psi>=9.0) return {stars:5, label:"Elite Partnership"};
@@ -1781,6 +1903,7 @@ function renderView(){
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
     ${renderAchievements(t)}
     ${renderKitchenRatings(t)}
+    ${renderPredictionsToggle()}
     ${body}
     <div class="chip-group" style="margin-top:10px;">
       <button class="btn btn-outline btn-sm" data-action="copy-link-view">Copy shareable link</button>
@@ -2313,6 +2436,8 @@ function renderMatchCard(m, t, ctx, editable){
   }
   const aWin = done && m.winner===m.a.id, bWin = done && m.winner===m.b.id;
   const courtTag = m.court ? `<span class="court-tag">Court ${m.court}</span>` : "";
+  const pred = (!done && state.matchPredictions) ? state.matchPredictions[m.id] : null;
+  const predTag = pred ? `<div class="predict-tag">${pred.favored==="A"?m.a.label:m.b.label} favored ${Math.round(Math.max(pred.probA,pred.probB)*100)}% \u00b7 Predicted ${pred.scoreline.winner}-${pred.scoreline.loser} \u00b7 ${pred.confidence} confidence</div>` : "";
   if(!editable){
     return `
       <div class="match-card ${done?"done":""}">
@@ -2320,6 +2445,7 @@ function renderMatchCard(m, t, ctx, editable){
         <div class="side ${aWin?"win":""}">${m.a.label}</div>
         <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">${done?`${m.scoreA} – ${m.scoreB}`:"—"}</div>
         <div class="side ${bWin?"win":""}" style="text-align:right;">${m.b.label}</div>
+        ${predTag}
       </div>`;
   }
   return `
@@ -2335,6 +2461,7 @@ function renderMatchCard(m, t, ctx, editable){
       <button class="btn btn-ink btn-sm save-score" data-action="save-score" data-mid="${m.id}" data-ctx="${effectiveCtx}">Save</button>
       ${editablePlayers ? `<button class="btn btn-outline btn-sm" data-action="start-edit-match" data-mid="${m.id}" title="Change who's playing">Edit players</button>` : ""}
       ${removable ? `<button class="remove-btn" data-action="remove-match" data-mid="${m.id}" data-ctx="${effectiveCtx}" title="Remove this match">✕</button>` : ""}
+      ${predTag}
     </div>`;
 }
 
@@ -2469,7 +2596,7 @@ async function addPlayerToSession(){
   await upsertPlayers([{name, dupr}]);
   await addToPlayerIndex(name, t.code);
   state.playerDb = await loadPlayerDb();
-  state.kitchenRatings = null; state.expandedRating = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
   render();
   showToast(`${name} added to the session`);
 }
@@ -2549,7 +2676,7 @@ function bindEvents(){
     else if(action==="save-score") await handleSaveScore(el.dataset.mid, el.dataset.ctx);
     else if(action==="search-profile") await openProfile(document.getElementById("profileSearchInput").value.trim());
     else if(action==="view-profile") await openProfile(el.dataset.name);
-    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; render(); startPolling(); }
+    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; state.matchPredictions=null; render(); startPolling(); }
     else if(action==="share-whatsapp") shareWhatsapp(state.tournament);
     else if(action==="share-whatsapp-view") shareWhatsapp(state.tournament);
     else if(action==="generate-result-card") await generateResultCard();
@@ -2570,6 +2697,7 @@ function bindEvents(){
     else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
     else if(action==="add-freeplay-match") await addFreeplayMatch();
     else if(action==="add-player-to-session") await addPlayerToSession();
+    else if(action==="compute-predictions") await computeMatchPredictions();
     else if(action==="remove-match") await handleRemoveMatch(el.dataset.mid, el.dataset.ctx);
     else if(action==="start-edit-match") { state.editingMatchId = el.dataset.mid; render(); }
     else if(action==="cancel-edit-match") { state.editingMatchId = null; render(); }
@@ -3125,7 +3253,7 @@ async function handleJoin(inputId){
   state.loading = false;
   state.tournament = t;
   state.tCode = val;
-  state.kitchenRatings = null; state.expandedRating = null; state.editingMatchId = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.editingMatchId = null; state.matchPredictions = null;
   render();
   if(t){ haptic("medium"); startPolling(); }
 }
@@ -3239,7 +3367,7 @@ async function handleSaveScore(mid, ctx){
   if(ctx==="ko") propagateBracket(t.bracket);
 
   await saveTournament(t);
-  state.kitchenRatings = null; state.expandedRating = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
   render();
   showToast(wasAlreadyScored ? "Score updated" : "Score saved");
 }
@@ -3263,7 +3391,7 @@ async function handleRemoveMatch(mid, ctx){
   }
   await saveTournament(t);
   haptic("strong");
-  state.kitchenRatings = null; state.expandedRating = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
   render();
   showToast("Match removed");
 }
@@ -3289,7 +3417,7 @@ async function saveEditMatch(mid, ctx){
 
   await saveTournament(t);
   state.editingMatchId = null;
-  state.kitchenRatings = null; state.expandedRating = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
   render();
   showToast("Match updated");
 }
@@ -3339,7 +3467,7 @@ async function init(){
     const code = hash.replace("#code=","").toUpperCase();
     state.loading = true; state.route="view"; render();
     const t = await loadTournamentByCode(code);
-    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null;
+    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; state.matchPredictions=null;
     render();
     if(t) startPolling();
   } else {
