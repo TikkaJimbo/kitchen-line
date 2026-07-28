@@ -364,7 +364,8 @@ let state = {
   partnershipList: null,
   expandedPartnership: null,
   profileReturnRoute: null,
-  matchPredictions: null
+  matchPredictions: null,
+  predictionReport: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -710,6 +711,46 @@ async function computeKitchenRating(t, name, cache){
     label: ratingLabel(overall)
   };
 }
+function renderPredictionResult(m){
+  const p = m.prediction;
+  const favoredLabel = p.favored==="A" ? m.a.label : m.b.label;
+  const actualWinnerLabel = m.winner===m.a.id ? m.a.label : m.b.label;
+  const correct = (p.favored==="A" && m.winner===m.a.id) || (p.favored==="B" && m.winner===m.b.id);
+  const icon = correct ? "\u2713" : "\u2717";
+  const color = correct ? "var(--court)" : "var(--red)";
+  return `<div class="predict-tag" style="color:${color};">Predicted ${favoredLabel} ${Math.round(p.probFavored*100)}% (${p.scoreline.winner}-${p.scoreline.loser}) \u00b7 Actual: ${actualWinnerLabel} won ${Math.max(m.scoreA,m.scoreB)}-${Math.min(m.scoreA,m.scoreB)} ${icon}</div>`;
+}
+function renderSessionPredictionsReport(t){
+  const matches = collectAllMatches(t).filter(m=>m.prediction && m.scoreA!=null && m.scoreB!=null && !m.isBye);
+  if(!matches.length) return "";
+  let correct=0, marginErrorSum=0;
+  const byConfidence = {Low:{correct:0,total:0}, Medium:{correct:0,total:0}, High:{correct:0,total:0}};
+  matches.forEach(m=>{
+    const p = m.prediction;
+    const isCorrect = (p.favored==="A" && m.winner===m.a.id) || (p.favored==="B" && m.winner===m.b.id);
+    if(isCorrect) correct++;
+    const predictedMargin = p.scoreline.winner - p.scoreline.loser;
+    const actualMargin = Math.abs(m.scoreA - m.scoreB);
+    marginErrorSum += Math.abs(predictedMargin - actualMargin);
+    if(byConfidence[p.confidence]){ byConfidence[p.confidence].total++; if(isCorrect) byConfidence[p.confidence].correct++; }
+  });
+  const accuracy = Math.round((correct/matches.length)*100);
+  const avgMarginError = (marginErrorSum/matches.length).toFixed(1);
+  return `
+    <div class="card">
+      <p class="eyebrow">Session predictions report</p>
+      <h2 style="margin-bottom:2px;">${accuracy}% accurate</h2>
+      <p class="sub">${correct} of ${matches.length} predictions correctly picked the winner &middot; avg scoreline error &plusmn;${avgMarginError} pts</p>
+      <div class="table-scroll"><table>
+        <tr><th>Confidence</th><th>Correct</th><th>Accuracy</th></tr>
+        ${["High","Medium","Low"].map(c=>{
+          const d = byConfidence[c];
+          return d.total ? `<tr><td>${c}</td><td>${d.correct}/${d.total}</td><td>${Math.round((d.correct/d.total)*100)}%</td></tr>` : "";
+        }).join("")}
+      </table></div>
+      <p class="help" style="margin-top:8px;">Stays visible even after this session ends, so predictions can be checked against what actually happened.</p>
+    </div>`;
+}
 function renderPredictionsToggle(){
   if(state.matchPredictions){
     return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, and head-to-head record.</p>`;
@@ -921,10 +962,14 @@ async function computeMatchPredictions(){
   const predictions = {};
   const matches = collectAllMatches(t).filter(m=>!m.isBye && m.a && m.b && m.a.id && m.b.id && m.scoreA==null && m.scoreB==null);
   for(const m of matches){
-    predictions[m.id] = await computeMatchPrediction(m, cache);
+    const pred = await computeMatchPrediction(m, cache);
+    predictions[m.id] = pred;
+    m.prediction = { favored: pred.favored, probFavored: Math.round(Math.max(pred.probA,pred.probB)*1000)/1000, scoreline: pred.scoreline, confidence: pred.confidence, signalsUsed: pred.signalsUsed };
   }
   state.matchPredictions = predictions;
+  await saveTournament(t);
   render();
+  showToast("Predictions ready");
 }
 function partnershipTier(psi){
   if(psi>=9.0) return {stars:5, label:"Elite Partnership"};
@@ -2010,6 +2055,7 @@ function renderView(){
     ${champion ? `<div class="champion-banner"><div class="lbl">🏆 ${championStatusLabel}</div><div class="name">${champion.label}</div></div>` : ""}
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
     ${renderAchievements(t)}
+    ${renderSessionPredictionsReport(t)}
     ${renderKitchenRatings(t)}
     ${renderPredictionsToggle()}
     ${body}
@@ -2404,6 +2450,32 @@ function renderAdminLogin(){
     </div>
   `;
 }
+function renderPredictionReportBody(r){
+  if(!r) return `<p class="help" style="margin-top:10px;">No predicted-and-completed matches found yet anywhere in the system.</p>`;
+  const confRows = ["High","Medium","Low"].map(c=>{
+    const d = r.byConfidence[c];
+    return d.total ? `<tr><td>${c}</td><td>${d.correct}/${d.total}</td><td>${Math.round((d.correct/d.total)*100)}%</td></tr>` : "";
+  }).join("");
+  const signalRows = Object.keys(r.bySignals).sort((a,b)=>b-a).map(k=>{
+    const d = r.bySignals[k];
+    return `<tr><td>${k} signal${k==="1"?"":"s"} available</td><td>${d.correct}/${d.total}</td><td>${Math.round((d.correct/d.total)*100)}%</td></tr>`;
+  }).join("");
+  return `
+    <div style="margin-top:14px;">
+      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+        <div class="stat-tile"><div class="num">${Math.round(r.accuracy*100)}%</div><div class="lbl">Overall accuracy</div></div>
+        <div class="stat-tile"><div class="num">${r.total}</div><div class="lbl">Predictions checked</div></div>
+        <div class="stat-tile"><div class="num">&plusmn;${r.avgMarginError.toFixed(1)}</div><div class="lbl">Avg scoreline error</div></div>
+      </div>
+      <p class="help">Brier score: ${r.brierScore.toFixed(3)} (0 = perfect, 0.25 = no better than a coin flip, 1 = always confidently wrong)</p>
+      <p class="eyebrow" style="margin-top:14px;">Accuracy by confidence tier</p>
+      <p class="help" style="margin-top:0;">If the algorithm's confidence is meaningful, High should consistently beat Low here.</p>
+      <div class="table-scroll"><table><tr><th>Confidence</th><th>Correct</th><th>Accuracy</th></tr>${confRows}</table></div>
+      <p class="eyebrow" style="margin-top:14px;">Accuracy by signals available</p>
+      <p class="help" style="margin-top:0;">Whether having more data (Kitchen Rating, DUPR, fairness, head-to-head all present) actually predicts better.</p>
+      <div class="table-scroll"><table><tr><th>Signals</th><th>Correct</th><th>Accuracy</th></tr>${signalRows}</table></div>
+    </div>`;
+}
 function renderAdminDashboard(){
   const sessions = state.adminSessions;
   return `
@@ -2457,6 +2529,12 @@ function renderAdminDashboard(){
           <button class="btn btn-ink btn-sm" data-action="admin-save-fairness" data-name="${p.name}" style="height:44px;">Save</button>
         </div>
       `).join("") : `<p class="help">No players yet.</p>`}
+    </div>
+    <div class="card">
+      <p class="eyebrow">Prediction accuracy report</p>
+      <p class="sub" style="margin-top:0;">Scans every session's stored win predictions against what actually happened, to see if the algorithm is working &mdash; and where it isn't.</p>
+      <button class="btn btn-ink btn-sm" data-action="run-prediction-report">${state.predictionReport ? "Refresh report" : "Run report"}</button>
+      ${state.predictionReport ? renderPredictionReportBody(state.predictionReport) : ""}
     </div>
     <div class="card">
       <p class="eyebrow">All sessions (${sessions?sessions.length:0})</p>
@@ -2545,7 +2623,7 @@ function renderMatchCard(m, t, ctx, editable){
   const aWin = done && m.winner===m.a.id, bWin = done && m.winner===m.b.id;
   const courtTag = m.court ? `<span class="court-tag">Court ${m.court}</span>` : "";
   const pred = (!done && state.matchPredictions) ? state.matchPredictions[m.id] : null;
-  const predTag = pred ? `<div class="predict-tag">${pred.favored==="A"?m.a.label:m.b.label} favored ${Math.round(Math.max(pred.probA,pred.probB)*100)}% \u00b7 Predicted ${pred.scoreline.winner}-${pred.scoreline.loser} \u00b7 ${pred.confidence} confidence</div>` : "";
+  const predTag = pred ? `<div class="predict-tag">${pred.favored==="A"?m.a.label:m.b.label} favored ${Math.round(Math.max(pred.probA,pred.probB)*100)}% \u00b7 Predicted ${pred.scoreline.winner}-${pred.scoreline.loser} \u00b7 ${pred.confidence} confidence</div>` : (done && m.prediction ? renderPredictionResult(m) : "");
   if(!editable){
     return `
       <div class="match-card ${done?"done":""}">
@@ -2827,6 +2905,7 @@ function bindEvents(){
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
+    else if(action==="run-prediction-report") await runPredictionReport();
     else if(action==="admin-add-player") await adminAddPlayer();
   };
 }
@@ -3104,6 +3183,52 @@ async function adminLogoutHandler(){
   try{ await sbClient.auth.signOut(); }catch(e){}
   state.adminUser = null;
   state.adminSessions = null;
+  render();
+}
+async function buildPredictionAccuracyReport(){
+  const { data, error } = await sbClient.from("kv_store").select("key,value").like("key","tourney-%").limit(300);
+  if(error) throw error;
+  const tournaments = (data||[]).map(row=>{ try{ return JSON.parse(row.value); }catch(e){ return null; } }).filter(Boolean);
+  let matches = [];
+  tournaments.forEach(t=>{
+    collectAllMatches(t).filter(m=>m.prediction && m.scoreA!=null && m.scoreB!=null && !m.isBye).forEach(m=>matches.push(m));
+  });
+  if(!matches.length) return null;
+  let correct=0, marginErrorSum=0, brierSum=0;
+  const byConfidence = {Low:{correct:0,total:0}, Medium:{correct:0,total:0}, High:{correct:0,total:0}};
+  const bySignals = {};
+  matches.forEach(m=>{
+    const p = m.prediction;
+    const isCorrect = (p.favored==="A" && m.winner===m.a.id) || (p.favored==="B" && m.winner===m.b.id);
+    if(isCorrect) correct++;
+    const predictedMargin = p.scoreline.winner - p.scoreline.loser;
+    const actualMargin = Math.abs(m.scoreA-m.scoreB);
+    marginErrorSum += Math.abs(predictedMargin-actualMargin);
+    if(byConfidence[p.confidence]){ byConfidence[p.confidence].total++; if(isCorrect) byConfidence[p.confidence].correct++; }
+    const sk = p.signalsUsed;
+    if(!bySignals[sk]) bySignals[sk] = {correct:0,total:0};
+    bySignals[sk].total++; if(isCorrect) bySignals[sk].correct++;
+    const probActualWinner = isCorrect ? p.probFavored : (1-p.probFavored);
+    brierSum += Math.pow(1-probActualWinner, 2);
+  });
+  return {
+    total: matches.length, correct,
+    accuracy: correct/matches.length,
+    avgMarginError: marginErrorSum/matches.length,
+    brierScore: brierSum/matches.length,
+    byConfidence, bySignals
+  };
+}
+async function runPredictionReport(){
+  state.loading = true; render();
+  try{
+    state.predictionReport = await buildPredictionAccuracyReport();
+  }catch(e){
+    console.error("runPredictionReport failed", e);
+    showToast("Couldn't build the report");
+    state.predictionReport = null;
+  }
+  state.loading = false;
   render();
 }
 async function openSessionViewer(){
@@ -3540,6 +3665,7 @@ async function saveEditMatch(mid, ctx){
     match.a = pa; match.b = pb;
   }
 
+  delete match.prediction;
   await saveTournament(t);
   state.editingMatchId = null;
   state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
