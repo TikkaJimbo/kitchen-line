@@ -2307,15 +2307,19 @@ function renderSessionViewer(){
       <p class="eyebrow">All sessions</p>
       <h2>Session viewer</h2>
       <p class="sub">${list.length} session${list.length===1?"":"s"} played so far, most recent first.</p>
-      ${!list.length ? `<p class="help">No sessions logged yet.</p>` : list.map(s=>`
+      ${!list.length ? `<p class="help">No sessions logged yet.</p>` : list.map(s=>{
+        const today = todayStr();
+        const status = s.ended ? `<span class="court-tag" style="background:var(--court); color:var(--kitchen);">Completed</span>`
+          : (s.date > today ? `<span class="court-tag">Upcoming</span>` : "");
+        return `
         <div class="match-card">
           <div style="flex:2; min-width:180px;">
-            <div style="font-weight:800;">${s.location}</div>
+            <div style="font-weight:800; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">${s.location} ${status}</div>
             <div class="help" style="margin:2px 0 0;">${s.date} &middot; ${s.format} &middot; ${s.matchType}</div>
           </div>
           <button class="btn btn-outline btn-sm" data-action="view-profile-code" data-code="${s.code}">View &middot; ${s.code}</button>
         </div>
-      `).join("")}
+      `;}).join("")}
     </div>
   `;
 }
@@ -3243,7 +3247,7 @@ async function openSessionViewer(){
       let t=null; try{ t = JSON.parse(row.value); }catch(e){}
       if(!t) return null;
       return {
-        code: t.code, location: t.location, date: t.date,
+        code: t.code, location: t.location, date: t.date, ended: t.ended===true,
         format: formatLabel(t),
         matchType: t.matchType==="doubles"?"Doubles":t.matchType==="mixer"?"Doubles (rotating)":"Singles"
       };
