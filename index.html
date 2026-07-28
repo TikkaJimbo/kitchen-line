@@ -1307,10 +1307,57 @@ function roundRobinPairs(participants){
   }
   return rounds;
 }
-function generateMixerRounds(players, ratingsMap){
+function allTeamPairings(items){
+  if(items.length===0) return [[]];
+  if(items.length===2) return [[[items[0],items[1]]]];
+  const [first,...rest] = items;
+  const results=[];
+  for(let i=0;i<rest.length;i++){
+    const partner = rest[i];
+    const remaining = rest.slice(0,i).concat(rest.slice(i+1));
+    allTeamPairings(remaining).forEach(sp=> results.push([[first,partner], ...sp]));
+  }
+  return results;
+}
+function scoreArrangement(gamesArr, opponentCounts){
+  let strengthCost=0, repeatCost=0;
+  gamesArr.forEach(([teamX,teamY])=>{
+    strengthCost += Math.abs(teamX._strength - teamY._strength);
+    teamX.players.forEach(px=> teamY.players.forEach(py=>{
+      repeatCost += (opponentCounts[px] && opponentCounts[px][py]) || 0;
+    }));
+  });
+  return strengthCost + repeatCost*15; // one repeat opponent-encounter costs roughly as much as a 15-point strength gap
+}
+function pickBestArrangement(teams, opponentCounts){
+  if(teams.length<2) return [];
+  if(teams.length>8){
+    // too many simultaneous games to brute-force every pairing; fall back to strength-sort only
+    const sorted = teams.slice().sort((a,b)=>a._strength-b._strength);
+    const games=[]; for(let i=0;i<sorted.length-1;i+=2) games.push([sorted[i],sorted[i+1]]);
+    return games;
+  }
+  const candidates = allTeamPairings(teams);
+  let best=null, bestScore=Infinity;
+  candidates.forEach(arr=>{ const s=scoreArrangement(arr,opponentCounts); if(s<bestScore){ bestScore=s; best=arr; } });
+  return best;
+}
+function recordOpponents(games, opponentCounts){
+  games.forEach(([teamX,teamY])=>{
+    teamX.players.forEach(px=> teamY.players.forEach(py=>{
+      opponentCounts[px]=opponentCounts[px]||{}; opponentCounts[px][py]=(opponentCounts[px][py]||0)+1;
+      opponentCounts[py]=opponentCounts[py]||{}; opponentCounts[py][px]=(opponentCounts[py][px]||0)+1;
+    }));
+  });
+}
+function partnershipKey(p1,p2){ return [p1,p2].sort().join("|"); }
+function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnerships){
   // players: [{name,dupr}] -> rotates partners each round (round-robin partner schedule),
-  // then pairs the resulting teams against each other within the round.
+  // then picks the team-vs-team pairing within each round that minimizes strength mismatch
+  // AND repeat opponent encounters together, tracked live via opponentCounts/usedPartnerships.
   ratingsMap = ratingsMap || {};
+  opponentCounts = opponentCounts || {};
+  usedPartnerships = usedPartnerships || new Set();
   const participants = players.map((p,i)=>({id:"mp-"+i, label:p.name, dupr:p.dupr}));
   const partnerRounds = roundRobinPairs(participants);
   return partnerRounds.map((teamsRaw, ri)=>{
@@ -1320,28 +1367,47 @@ function generateMixerRounds(players, ratingsMap){
     if(byePair) sitOut.push(byePair[0].bye ? byePair[1].label : byePair[0].label);
     let teams = realPairs.map((pair,ti)=>{
       const r1 = ratingsMap[pair[0].label], r2 = ratingsMap[pair[1].label];
-      const hasRating = r1!=null || r2!=null;
       const strength = ((r1!=null?r1:50) + (r2!=null?r2:50)) / 2;
-      return {
-        id:"team-r"+ri+"-"+ti, label:pair[0].label+" & "+pair[1].label, players:[pair[0].label, pair[1].label],
-        _strength: strength, _hasRating: hasRating
-      };
+      usedPartnerships.add(partnershipKey(pair[0].label, pair[1].label));
+      return { id:"team-r"+ri+"-"+ti, label:pair[0].label+" & "+pair[1].label, players:[pair[0].label, pair[1].label], _strength: strength };
     });
-    // If any player in this round has a hidden fairness rating, pair the closest-strength teams
-    // against each other for a more competitive game; otherwise fall back to a random pairing.
-    const anyRatingsKnown = teams.some(x=>x._hasRating);
-    teams = anyRatingsKnown ? teams.slice().sort((a,b)=>a._strength-b._strength) : shuffle(teams);
-    const matches=[]; let idx=0;
-    while(teams.length-idx>=2){
-      const aTeam=teams[idx], bTeam=teams[idx+1];
-      const aClean = {id:aTeam.id, label:aTeam.label, players:aTeam.players};
-      const bClean = {id:bTeam.id, label:bTeam.label, players:bTeam.players};
-      matches.push({id:"mx-"+ri+"-"+(idx/2), round:ri+1, a:aClean, b:bClean, scoreA:null, scoreB:null, winner:null, isBye:false});
-      idx+=2;
-    }
-    if(teams.length-idx===1) sitOut.push(...teams[idx].players);
+    if(teams.length%2!==0){ const extra=teams.pop(); sitOut.push(...extra.players); }
+    const arrangement = pickBestArrangement(teams, opponentCounts);
+    recordOpponents(arrangement, opponentCounts);
+    const matches = arrangement.map((pair,gi)=>{
+      const aClean = {id:pair[0].id, label:pair[0].label, players:pair[0].players};
+      const bClean = {id:pair[1].id, label:pair[1].label, players:pair[1].players};
+      return {id:"mx-"+ri+"-"+gi, round:ri+1, a:aClean, b:bClean, scoreA:null, scoreB:null, winner:null, isBye:false};
+    });
     return {round:ri+1, matches, sitOut};
   });
+}
+function previewPartnershipOverlap(shuffledPlayers, maxGamesNeeded, usedPartnerships){
+  const participants = shuffledPlayers.map((p,i)=>({id:"x"+i, label:p.name}));
+  const partnerRounds = roundRobinPairs(participants);
+  let overlap=0, gamesSoFar=0;
+  for(const teamsRaw of partnerRounds){
+    if(gamesSoFar>=maxGamesNeeded) break;
+    const realPairs = teamsRaw.filter(pair=>!pair[0].bye && !pair[1].bye);
+    realPairs.forEach(pair=>{ if(usedPartnerships.has(partnershipKey(pair[0].label,pair[1].label))) overlap++; });
+    gamesSoFar += Math.floor(realPairs.length/2);
+  }
+  return overlap;
+}
+function buildTrackersFromMixerRounds(mixerRounds){
+  const opponentCounts = {};
+  const usedPartnerships = new Set();
+  mixerRounds.forEach(r=>{
+    r.matches.forEach(m=>{
+      usedPartnerships.add(partnershipKey(m.a.players[0], m.a.players[1]));
+      usedPartnerships.add(partnershipKey(m.b.players[0], m.b.players[1]));
+      m.a.players.forEach(px=> m.b.players.forEach(py=>{
+        opponentCounts[px]=opponentCounts[px]||{}; opponentCounts[px][py]=(opponentCounts[px][py]||0)+1;
+        opponentCounts[py]=opponentCounts[py]||{}; opponentCounts[py][px]=(opponentCounts[py][px]||0)+1;
+      }));
+    });
+  });
+  return {opponentCounts, usedPartnerships};
 }
 function computeMixerStandings(playerNames, mixerRounds){
   const table={};
@@ -1459,12 +1525,27 @@ function fillRoundRobinToTarget(participants, targetGames){
   return allMatches;
 }
 function fillMixerToTarget(players, targetGames, ratingsMap){
-  if(players.length<4) return generateMixerRounds(players, ratingsMap);
+  if(players.length<4) return generateMixerRounds(players, ratingsMap, {}, new Set());
+  const opponentCounts = {};
+  const usedPartnerships = new Set();
   let rounds = [];
   let realCount = 0;
   let cycle = 0;
   while(realCount < targetGames && cycle < 10){
-    const cycleRounds = generateMixerRounds(shuffle(players), ratingsMap);
+    let order;
+    if(cycle===0){
+      order = shuffle(players);
+    } else {
+      let bestOrder=null, bestOverlap=Infinity;
+      for(let attempt=0; attempt<8; attempt++){
+        const candidate = shuffle(players);
+        const overlap = previewPartnershipOverlap(candidate, targetGames-realCount, usedPartnerships);
+        if(overlap<bestOverlap){ bestOverlap=overlap; bestOrder=candidate; }
+        if(bestOverlap===0) break;
+      }
+      order = bestOrder;
+    }
+    const cycleRounds = generateMixerRounds(order, ratingsMap, opponentCounts, usedPartnerships);
     const maxRound = rounds.length ? Math.max(...rounds.map(r=>r.round)) : 0;
     for(const r of cycleRounds){
       if(realCount >= targetGames) break;
@@ -2611,7 +2692,15 @@ async function addPlayerToSession(){
     });
   } else if(t.format==="mixer"){
     const fullList = t.participants.map(p=>({name:p.label, dupr:p.dupr}));
-    const extra = generateMixerRounds(shuffle(fullList), buildFairnessMap());
+    const {opponentCounts, usedPartnerships} = buildTrackersFromMixerRounds(t.mixerRounds);
+    let bestOrder=null, bestOverlap=Infinity;
+    for(let attempt=0; attempt<8; attempt++){
+      const candidate = shuffle(fullList);
+      const overlap = previewPartnershipOverlap(candidate, fullList.length-1, usedPartnerships);
+      if(overlap<bestOverlap){ bestOverlap=overlap; bestOrder=candidate; }
+      if(bestOverlap===0) break;
+    }
+    const extra = generateMixerRounds(bestOrder, buildFairnessMap(), opponentCounts, usedPartnerships);
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-add"+Date.now(); }); });
     assignCourts(extra, t.courts);
@@ -2867,7 +2956,16 @@ async function addMoreGames(){
   const t = state.tournament;
   if(t.format==="mixer"){
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
-    const extra = generateMixerRounds(shuffle(t.participants.map(p=>({name:p.label, dupr:p.dupr}))), buildFairnessMap());
+    const playerList = t.participants.map(p=>({name:p.label, dupr:p.dupr}));
+    const {opponentCounts, usedPartnerships} = buildTrackersFromMixerRounds(t.mixerRounds);
+    let bestOrder=null, bestOverlap=Infinity;
+    for(let attempt=0; attempt<8; attempt++){
+      const candidate = shuffle(playerList);
+      const overlap = previewPartnershipOverlap(candidate, playerList.length-1, usedPartnerships);
+      if(overlap<bestOverlap){ bestOverlap=overlap; bestOrder=candidate; }
+      if(bestOverlap===0) break;
+    }
+    const extra = generateMixerRounds(bestOrder, buildFairnessMap(), opponentCounts, usedPartnerships);
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-x"+maxRound; }); });
     assignCourts(extra, t.courts);
     t.mixerRounds = t.mixerRounds.concat(extra);
