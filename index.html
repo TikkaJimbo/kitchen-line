@@ -365,7 +365,8 @@ let state = {
   expandedPartnership: null,
   profileReturnRoute: null,
   matchPredictions: null,
-  predictionReport: null
+  predictionReport: null,
+  predictionReportRun: false
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -2533,8 +2534,8 @@ function renderAdminDashboard(){
     <div class="card">
       <p class="eyebrow">Prediction accuracy report</p>
       <p class="sub" style="margin-top:0;">Scans every session's stored win predictions against what actually happened, to see if the algorithm is working &mdash; and where it isn't.</p>
-      <button class="btn btn-ink btn-sm" data-action="run-prediction-report">${state.predictionReport ? "Refresh report" : "Run report"}</button>
-      ${state.predictionReport ? renderPredictionReportBody(state.predictionReport) : ""}
+      <button class="btn btn-ink btn-sm" data-action="run-prediction-report">${state.predictionReportRun ? "Refresh report" : "Run report"}</button>
+      ${state.predictionReportRun ? renderPredictionReportBody(state.predictionReport) : ""}
     </div>
     <div class="card">
       <p class="eyebrow">All sessions (${sessions?sessions.length:0})</p>
@@ -3228,6 +3229,7 @@ async function runPredictionReport(){
     showToast("Couldn't build the report");
     state.predictionReport = null;
   }
+  state.predictionReportRun = true;
   state.loading = false;
   render();
 }
