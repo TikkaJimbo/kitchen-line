@@ -1010,8 +1010,17 @@ async function computeSessionDifficulty(){
 
   const result = {};
   Object.keys(diffMap).forEach(k=>{
-    const avgProb = diffMap[k].count ? diffMap[k].probSum/diffMap[k].count : null;
-    result[k] = avgProb!=null ? { expectedWinRate: avgProb, difficulty: (1-avgProb)*10 } : { expectedWinRate:null, difficulty:null };
+    const count = diffMap[k].count;
+    const avgProb = count ? diffMap[k].probSum/count : null;
+    if(avgProb==null){ result[k] = { expectedWinRate:null, expectedWins:null, expectedLosses:null, difficulty:null }; return; }
+    const expectedWins = Math.round(avgProb*count);
+    const expectedLosses = count - expectedWins;
+    const roundedExpectedRate = count ? expectedWins/count : null;
+    result[k] = {
+      expectedWinRate: roundedExpectedRate,
+      expectedWins, expectedLosses,
+      difficulty: (1-roundedExpectedRate)*10
+    };
   });
   state.matchupDifficulty = result;
   render();
@@ -2679,7 +2688,7 @@ function renderStandingsTable(standings, advanceCount){
         return `
         <tr class="${advanceCount && i<advanceCount ? "leader":""}">
           <td>${i+1}</td><td>${nameLinks(s.label)}</td><td>${s.won}-${s.lost}</td><td>${winPct}%</td><td>${s.pf-s.pa>0?"+":""}${s.pf-s.pa}</td><td>${s.pts}</td>
-          ${diffMap ? `<td>${d && d.expectedWinRate!=null ? Math.round(d.expectedWinRate*100)+"%" : "&mdash;"}</td><td>${d && d.difficulty!=null ? d.difficulty.toFixed(1) : "&mdash;"}</td>` : ""}
+          ${diffMap ? `<td>${d && d.expectedWinRate!=null ? Math.round(d.expectedWinRate*100)+"% ("+d.expectedWins+"-"+d.expectedLosses+")" : "&mdash;"}</td><td>${d && d.difficulty!=null ? d.difficulty.toFixed(1) : "&mdash;"}</td>` : ""}
         </tr>`;
       }).join("")}
     </table></div>`;
