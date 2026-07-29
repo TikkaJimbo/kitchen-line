@@ -340,7 +340,7 @@ let state = {
   form: {
     location: "", otherLocation: "", date: todayStr(), duration: 90, gameLen: 15, courts: 1,
     matchType: "singles", format: "roundrobin", groupSize: 4, advancePerGroup: 2,
-    players: [], teams: [], pairSelection: null, playersConfirmed: false, crownChampion: true
+    players: [], teams: [], pairSelection: null, playersConfirmed: false, crownChampion: true, replacingIdx: null
   },
   joinCodeInput: "",
   tournament: null,
@@ -1857,10 +1857,24 @@ function renderCreate(){
       </div>
       <div class="player-list">
         ${f.players.length===0 ? `<div class="empty">No players yet. Add at least 2 to get started.</div>` :
-          f.players.map((p,i)=>`
+          f.players.map((p,i)=> state.form.replacingIdx===i ? `
+            <div class="player-pill" style="flex-direction:column; align-items:stretch; gap:8px;">
+              <p class="eyebrow" style="margin:0;">Replace ${p.name} with&hellip;</p>
+              <div class="player-add-row" style="margin-bottom:0;">
+                <div class="field"><input type="text" id="replace-name" list="playerNames" placeholder="New player name"></div>
+                <div class="field dupr"><input type="text" id="replace-dupr" placeholder="DUPR"></div>
+              </div>
+              <div class="chip-group">
+                <button class="btn btn-ink btn-sm" data-action="save-replace-player" data-idx="${i}">Save</button>
+                <button class="btn btn-outline btn-sm" data-action="cancel-replace-player">Cancel</button>
+              </div>
+            </div>` : `
             <div class="player-pill">
               <div><span class="name">${p.name}</span>${p.dupr ? `<span class="dupr-tag">DUPR ${p.dupr}</span>`:""}</div>
-              <button class="remove-btn" data-action="remove-player" data-idx="${i}">Remove</button>
+              <div class="chip-group" style="gap:10px;">
+                <button class="remove-btn" data-action="start-replace-player" data-idx="${i}" style="color:var(--court);">Replace</button>
+                <button class="remove-btn" data-action="remove-player" data-idx="${i}">Remove</button>
+              </div>
             </div>`).join("")}
       </div>
       ${f.matchType==="doubles" && f.players.length>0 ? `<p class="help">${f.players.length % 2 !== 0 ? "Odd number of players — add one more for even doubles teams." : nParticipants+" teams once paired."}</p>` :
@@ -2862,6 +2876,9 @@ function bindEvents(){
     else if(action==="confirm-players") confirmPlayers();
     else if(action==="toggle-crown-champion") { state.form.crownChampion = !state.form.crownChampion; render(); }
     else if(action==="remove-player") { const idx=+el.dataset.idx; const removed=state.form.players[idx]; state.form.players.splice(idx,1); state.form.teams = state.form.teams.filter(t=>!t.includes(removed.name)); state.form.playersConfirmed=false; render(); }
+    else if(action==="start-replace-player") { state.form.replacingIdx = +el.dataset.idx; render(); }
+    else if(action==="cancel-replace-player") { state.form.replacingIdx = null; render(); }
+    else if(action==="save-replace-player") saveReplacePlayer(+el.dataset.idx);
     else if(action==="pick-pair") handlePairPick(el.dataset.name);
     else if(action==="remove-team") { state.form.teams.splice(+el.dataset.idx,1); render(); }
     else if(action==="clear-pairs") { state.form.teams=[]; render(); }
@@ -3423,7 +3440,7 @@ async function runH2H(){
 
 function resetForm(){
   state.form = { location:"", otherLocation:"", date:todayStr(), duration:90, gameLen:15, courts:1,
-    matchType:"singles", format:"roundrobin", groupSize:4, advancePerGroup:2, players:[], teams:[], pairSelection:null, playersConfirmed:false, crownChampion:true };
+    matchType:"singles", format:"roundrobin", groupSize:4, advancePerGroup:2, players:[], teams:[], pairSelection:null, playersConfirmed:false, crownChampion:true, replacingIdx:null };
   syncFormOnce();
 }
 async function syncFormOnce(){ state.playerDb = await loadPlayerDb(); }
@@ -3463,6 +3480,22 @@ function enforceParityRule(){
 function confirmPlayers(){
   state.form.playersConfirmed = true;
   enforceParityRule();
+  render();
+}
+function saveReplacePlayer(idx){
+  const f = state.form;
+  const nameEl = document.getElementById("replace-name");
+  const duprEl = document.getElementById("replace-dupr");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Enter a player name"); return; }
+  if(f.players.some((p,i)=> i!==idx && p.name.toLowerCase()===name.toLowerCase())){ showToast("Already in this list"); return; }
+  const duprVal = duprEl.value.trim();
+  const outgoing = f.players[idx];
+  f.players[idx] = { name, dupr: duprVal ? parseFloat(duprVal) : null };
+  f.teams = f.teams.filter(t=>!t.includes(outgoing.name));
+  f.replacingIdx = null;
+  f.playersConfirmed = false;
+  showToast(`Replaced ${outgoing.name} with ${name}`);
   render();
 }
 function addPlayer(){
