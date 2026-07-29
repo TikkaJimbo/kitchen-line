@@ -760,7 +760,7 @@ function renderDifficultyToggle(){
   return `
     <div class="card">
       <p class="eyebrow">Matchup difficulty</p>
-      <p class="sub" style="margin-top:0;">Adds Expected Win% and a 0-10 Difficulty score to the standings table &mdash; based on rating history, DUPR, and head-to-head record. Works even after the session has ended.</p>
+      <p class="sub" style="margin-top:0;">Adds Expected Win% (rounded to the nearest realistic record) and a precise 0-10 Difficulty score to the standings table &mdash; based on rating history, DUPR, and head-to-head record. Works even after the session has ended.</p>
       <button class="btn btn-outline btn-sm" data-action="compute-difficulty">Show matchup difficulty</button>
     </div>`;
 }
@@ -986,7 +986,7 @@ async function computeSessionDifficulty(){
   if(t.format==="mixer" || (t.format==="freeplay" && t.freeplayMode==="doubles")){
     for(const r of t.mixerRounds){
       for(const m of r.matches){
-        if(m.isBye || !m.a || !m.b) continue;
+        if(m.isBye || !m.a || !m.b || m.scoreA==null || m.scoreB==null) continue;
         const {probA, probB} = await getMatchProbs(m, cache);
         m.a.players.forEach(pn=>bump(pn, probA));
         m.b.players.forEach(pn=>bump(pn, probB));
@@ -994,14 +994,14 @@ async function computeSessionDifficulty(){
     }
   } else if(t.format==="roundrobin" || (t.format==="freeplay" && t.freeplayMode==="singles")){
     for(const m of t.matches){
-      if(m.isBye || !m.a || !m.b) continue;
+      if(m.isBye || !m.a || !m.b || m.scoreA==null || m.scoreB==null) continue;
       const {probA, probB} = await getMatchProbs(m, cache);
       bump(m.a.id, probA); bump(m.b.id, probB);
     }
   } else if(t.format==="groups"){
     for(const g of t.groups){
       for(const m of g.matches){
-        if(m.isBye || !m.a || !m.b) continue;
+        if(m.isBye || !m.a || !m.b || m.scoreA==null || m.scoreB==null) continue;
         const {probA, probB} = await getMatchProbs(m, cache);
         bump(m.a.id, probA); bump(m.b.id, probB);
       }
@@ -1019,7 +1019,7 @@ async function computeSessionDifficulty(){
     result[k] = {
       expectedWinRate: roundedExpectedRate,
       expectedWins, expectedLosses,
-      difficulty: (1-roundedExpectedRate)*10
+      difficulty: (1-avgProb)*10
     };
   });
   state.matchupDifficulty = result;
