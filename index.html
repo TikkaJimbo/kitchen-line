@@ -760,18 +760,18 @@ function renderDifficultyToggle(){
   return `
     <div class="card">
       <p class="eyebrow">Matchup difficulty</p>
-      <p class="sub" style="margin-top:0;">Adds Expected Win% (rounded to the nearest realistic record) and a precise 0-10 Difficulty score to the standings table &mdash; based on rating history, DUPR, and head-to-head record. Works even after the session has ended.</p>
+      <p class="sub" style="margin-top:0;">Adds Expected Win% (rounded to the nearest realistic record) and a precise 0-10 Difficulty score to the standings table &mdash; based on rating history, DUPR, head-to-head record, and (for doubles) partnership chemistry. Works even after the session has ended.</p>
       <button class="btn btn-outline btn-sm" data-action="compute-difficulty">Show matchup difficulty</button>
     </div>`;
 }
 function renderPredictionsToggle(){
   if(state.matchPredictions){
-    return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, and head-to-head record.</p>`;
+    return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, head-to-head record, and (for doubles) partnership chemistry.</p>`;
   }
   return `
     <div class="card">
       <p class="eyebrow">Predictions</p>
-      <p class="sub" style="margin-top:0;">See an estimated win chance and predicted scoreline for every unplayed match, based on rating history, DUPR, and head-to-head record.</p>
+      <p class="sub" style="margin-top:0;">See an estimated win chance and predicted scoreline for every unplayed match, based on rating history, DUPR, head-to-head record, and (for doubles) partnership chemistry.</p>
       <button class="btn btn-outline btn-sm" data-action="compute-predictions">Show win predictions</button>
     </div>`;
 }
@@ -929,6 +929,50 @@ function expectedScoreline(favoredProb){
   const loserScore = Math.max(1, Math.min(9, Math.round(11 - diff*20)));
   return {winner:11, loser:loserScore};
 }
+async function computePairChemistry(p1, p2, cache){
+  cache.chemistry = cache.chemistry || {};
+  const key = [p1,p2].sort().join("|");
+  if(cache.chemistry[key] !== undefined) return cache.chemistry[key];
+
+  const strengthA = await resolvePairStrength(p1, cache);
+  const strengthB = await resolvePairStrength(p2, cache);
+  const teamStrength = (strengthA + strengthB) / 2;
+
+  const codes = await getPlayerIndex(p1);
+  let wins=0, expectedSum=0, games=0;
+  const seen = new Set();
+  for(const code of codes.slice(0,25)){
+    let t = cache.tCache[code];
+    if(t===undefined){ t = await loadTournamentByCode(code); cache.tCache[code]=t; }
+    if(!t) continue;
+    const matches = collectAllMatches(t).filter(m=>!m.isBye && m.a && m.b && m.scoreA!=null && m.scoreB!=null);
+    for(const m of matches){
+      const mkey = t.code+"-"+m.id;
+      if(seen.has(mkey)) continue;
+      const aPlayers = m.a.players || [m.a.label];
+      const bPlayers = m.b.players || [m.b.label];
+      const onA = aPlayers.includes(p1) && aPlayers.includes(p2);
+      const onB = bPlayers.includes(p1) && bPlayers.includes(p2);
+      if(!onA && !onB) continue;
+      seen.add(mkey);
+      const oppPlayers = onA ? bPlayers : aPlayers;
+      if(oppPlayers.length<2) continue;
+      const oppStrengthA = await resolvePairStrength(oppPlayers[0], cache);
+      const oppStrengthB = await resolvePairStrength(oppPlayers[1], cache);
+      const oppStrength = (oppStrengthA+oppStrengthB)/2;
+      expectedSum += expectedWinProb(teamStrength, oppStrength);
+      const won = onA ? m.winner===m.a.id : m.winner===m.b.id;
+      if(won) wins++;
+      games++;
+    }
+  }
+  if(games<3){ cache.chemistry[key] = null; return null; }
+  const rawChemistry = (wins/games) - (expectedSum/games);
+  const dampen = games>=25 ? 0.9 : games>=10 ? 0.7 : 0.5; // shrink small samples toward zero effect
+  const result = { value: rawChemistry*dampen, games };
+  cache.chemistry[key] = result;
+  return result;
+}
 async function computeMatchPrediction(m, cache){
   const teamAPlayers = m.a.players || [m.a.label];
   const teamBPlayers = m.b.players || [m.b.label];
@@ -956,7 +1000,19 @@ async function computeMatchPrediction(m, cache){
   if(!probs.length){
     return { probA:0.5, probB:0.5, favored:"A", scoreline:{winner:13,loser:11}, confidence:"Low", signalsUsed:0 };
   }
-  const probA = probs.reduce((a,b)=>a+b,0)/probs.length;
+  let probA = probs.reduce((a,b)=>a+b,0)/probs.length;
+
+  let chemistryUsed = false;
+  if(teamAPlayers.length===2){
+    const chemA = await computePairChemistry(teamAPlayers[0], teamAPlayers[1], cache);
+    if(chemA){ probA += chemA.value; chemistryUsed = true; }
+  }
+  if(teamBPlayers.length===2){
+    const chemB = await computePairChemistry(teamBPlayers[0], teamBPlayers[1], cache);
+    if(chemB){ probA -= chemB.value; chemistryUsed = true; }
+  }
+  probA = Math.max(0.05, Math.min(0.95, probA));
+
   const probB = 1-probA;
   const favored = probA>=probB ? "A" : "B";
   const favoredProb = Math.max(probA, probB);
@@ -964,6 +1020,7 @@ async function computeMatchPrediction(m, cache){
 
   let points = probs.length;
   if(h2hTotal>=5) points++;
+  if(chemistryUsed) points++;
   const confidence = points<=2 ? "Low" : points<=4 ? "Medium" : "High";
 
   return { probA, probB, favored, scoreline, confidence, signalsUsed: probs.length };
