@@ -2067,6 +2067,7 @@ function renderView(){
     </div>
     ${canAddMore ? `<button class="btn btn-outline btn-sm" data-action="add-more-games" style="margin-bottom:14px;">+ Add another round of games</button>` : ""}
     ${!ended && t.format!=="groups" ? renderAddPlayerToSession(t) : ""}
+    ${!ended && (t.format==="roundrobin" || t.format==="mixer") ? renderManualAddMatch(t) : ""}
     ${champion ? `<div class="champion-banner"><div class="lbl">🏆 ${championStatusLabel}</div><div class="name">${champion.label}</div></div>` : ""}
     ${t.crossoverFinal && t.crossoverFinal.winner ? `<div class="champion-banner" style="background:var(--kitchen);"><div class="lbl">🎾 Crossover Final Winner</div><div class="name">${(t.crossoverFinal.a.id===t.crossoverFinal.winner ? t.crossoverFinal.a : t.crossoverFinal.b).label}</div></div>` : ""}
     ${renderAchievements(t)}
@@ -2635,6 +2636,7 @@ function renderMatchCard(m, t, ctx, editable){
     return `<div class="match-card bye"><div class="side">TBD</div><div class="side">TBD</div></div>`;
   }
   const done = m.scoreA!=null && m.scoreB!=null;
+  const scoreEditable = editable || !!state.adminUser;
   const editablePlayers = editable && (effectiveCtx==="mx" || effectiveCtx==="rr");
   if(editablePlayers && state.editingMatchId===m.id){
     return renderMatchEditForm(m, t, effectiveCtx);
@@ -2643,7 +2645,7 @@ function renderMatchCard(m, t, ctx, editable){
   const courtTag = m.court ? `<span class="court-tag">Court ${m.court}</span>` : "";
   const pred = (!done && state.matchPredictions) ? state.matchPredictions[m.id] : null;
   const predTag = pred ? `<div class="predict-tag">${pred.favored==="A"?m.a.label:m.b.label} favored ${Math.round(Math.max(pred.probA,pred.probB)*100)}% \u00b7 Predicted ${pred.scoreline.winner}-${pred.scoreline.loser} \u00b7 ${pred.confidence} confidence</div>` : (done && m.prediction ? renderPredictionResult(m) : "");
-  if(!editable){
+  if(!scoreEditable){
     return `
       <div class="match-card ${done?"done":""}">
         ${courtTag}
@@ -2656,6 +2658,7 @@ function renderMatchCard(m, t, ctx, editable){
   return `
     <div class="match-card ${done?"done":""}">
       ${courtTag}
+      ${(!editable && scoreEditable) ? `<span class="court-tag" style="background:var(--red); color:var(--kitchen);">Admin edit</span>` : ""}
       <div class="side ${aWin?"win":""}">${m.a.label}</div>
       <div class="score-inputs">
         <input type="number" min="0" data-mid="${m.id}" data-side="a" data-ctx="${effectiveCtx}" value="${m.scoreA!=null?m.scoreA:""}">
@@ -2722,6 +2725,47 @@ function renderAddPlayerToSession(t){
         <div class="field dupr"><label>DUPR</label><input type="text" id="addp-dupr" placeholder="3.5"></div>
         <button class="btn btn-ink btn-sm" data-action="add-player-to-session" style="height:44px;">Add</button>
       </div>
+    </div>`;
+}
+function renderManualAddMatch(t){
+  const courtField = t.courts>1 ? `<div class="field"><label>Court</label><select id="manual-court">${Array.from({length:t.courts},(_,i)=>i+1).map(c=>`<option value="${c}">Court ${c}</option>`).join("")}</select></div>` : "";
+  if(t.format==="roundrobin"){
+    const opts = t.participants.map(p=>`<option value="${p.id}">${p.label}</option>`).join("");
+    return `
+      <div class="card">
+        <p class="eyebrow">Add a match</p>
+        <p class="sub" style="margin-top:0;">Add back a match you deleted by accident, or add an extra one-off matchup. Leave the scores blank to add it unplayed.</p>
+        <div class="row">
+          <div class="field"><label>${t.matchType==="doubles"?"Team A":"Player A"}</label><select id="manual-a"><option value="">Select</option>${opts}</select></div>
+          <div class="field"><label>${t.matchType==="doubles"?"Team B":"Player B"}</label><select id="manual-b"><option value="">Select</option>${opts}</select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Score A</label><input type="number" id="manual-scoreA" min="0"></div>
+          <div class="field"><label>Score B</label><input type="number" id="manual-scoreB" min="0"></div>
+          ${courtField}
+        </div>
+        <button class="btn btn-ink btn-wide" data-action="add-manual-match">Add match</button>
+      </div>`;
+  }
+  const playerOpts = t.participants.map(p=>`<option value="${p.label}">${p.label}</option>`).join("");
+  return `
+    <div class="card">
+      <p class="eyebrow">Add a match</p>
+      <p class="sub" style="margin-top:0;">Add back a match you deleted by accident, or add an extra one-off matchup. Leave the scores blank to add it unplayed.</p>
+      <div class="row">
+        <div class="field"><label>Team A &mdash; Player 1</label><select id="manual-a1"><option value="">Select</option>${playerOpts}</select></div>
+        <div class="field"><label>Team A &mdash; Player 2</label><select id="manual-a2"><option value="">Select</option>${playerOpts}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Team B &mdash; Player 1</label><select id="manual-b1"><option value="">Select</option>${playerOpts}</select></div>
+        <div class="field"><label>Team B &mdash; Player 2</label><select id="manual-b2"><option value="">Select</option>${playerOpts}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Score A</label><input type="number" id="manual-scoreA" min="0"></div>
+        <div class="field"><label>Score B</label><input type="number" id="manual-scoreB" min="0"></div>
+        ${courtField}
+      </div>
+      <button class="btn btn-ink btn-wide" data-action="add-manual-match">Add match</button>
     </div>`;
 }
 function renderFreeplayAddMatch(t){
@@ -2812,6 +2856,51 @@ async function addPlayerToSession(){
   state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
   render();
   showToast(`${name} added to the session`);
+}
+async function addManualMatch(){
+  const t = state.tournament;
+  const scoreAEl = document.getElementById("manual-scoreA"), scoreBEl = document.getElementById("manual-scoreB");
+  const scoreA = scoreAEl.value===""? null : +scoreAEl.value;
+  const scoreB = scoreBEl.value===""? null : +scoreBEl.value;
+  if((scoreA!=null || scoreB!=null) && (scoreA==null || scoreB==null || scoreA===scoreB)){ showToast("Enter two different scores, or leave both blank"); return; }
+
+  let aObj, bObj;
+  if(t.format==="roundrobin"){
+    const aId = document.getElementById("manual-a").value, bId = document.getElementById("manual-b").value;
+    if(!aId || !bId || aId===bId){ showToast("Pick two different sides"); return; }
+    aObj = t.participants.find(p=>p.id===aId);
+    bObj = t.participants.find(p=>p.id===bId);
+    if(!aObj || !bObj) return;
+  } else {
+    const a1=document.getElementById("manual-a1").value, a2=document.getElementById("manual-a2").value;
+    const b1=document.getElementById("manual-b1").value, b2=document.getElementById("manual-b2").value;
+    const names=[a1,a2,b1,b2];
+    if(names.some(n=>!n)){ showToast("Pick all 4 players"); return; }
+    if(new Set(names).size<4){ showToast("Each player can only appear once"); return; }
+    aObj = {id:"man-a-"+Date.now(), label:a1+" & "+a2, players:[a1,a2]};
+    bObj = {id:"man-b-"+Date.now()+"x", label:b1+" & "+b2, players:[b1,b2]};
+  }
+
+  const winner = (scoreA!=null && scoreB!=null) ? (scoreA>scoreB ? aObj.id : bObj.id) : null;
+  const courtEl = document.getElementById("manual-court");
+  const court = courtEl ? +courtEl.value : undefined;
+  const match = {id:"man-"+Date.now(), round:0, a:aObj, b:bObj, scoreA, scoreB, winner, isBye:false};
+  if(court) match.court = court;
+
+  if(t.format==="roundrobin"){
+    const maxRound = t.matches.length ? Math.max(...t.matches.map(m=>m.round)) : 0;
+    match.round = maxRound+1;
+    t.matches.push(match);
+  } else {
+    const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
+    match.round = maxRound+1;
+    t.mixerRounds.push({round: match.round, matches:[match], sitOut:[]});
+  }
+
+  await saveTournament(t);
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
+  render();
+  showToast("Match added");
 }
 async function addFreeplayMatch(){
   const t = state.tournament;
@@ -2913,6 +3002,7 @@ function bindEvents(){
     else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
     else if(action==="add-freeplay-match") await addFreeplayMatch();
     else if(action==="add-player-to-session") await addPlayerToSession();
+    else if(action==="add-manual-match") await addManualMatch();
     else if(action==="compute-predictions") await computeMatchPredictions();
     else if(action==="remove-match") await handleRemoveMatch(el.dataset.mid, el.dataset.ctx);
     else if(action==="start-edit-match") { state.editingMatchId = el.dataset.mid; render(); }
