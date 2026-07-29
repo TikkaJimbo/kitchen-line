@@ -366,7 +366,8 @@ let state = {
   profileReturnRoute: null,
   matchPredictions: null,
   predictionReport: null,
-  predictionReportRun: false
+  predictionReportRun: false,
+  matchupDifficulty: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -752,6 +753,17 @@ function renderSessionPredictionsReport(t){
       <p class="help" style="margin-top:8px;">Stays visible even after this session ends, so predictions can be checked against what actually happened.</p>
     </div>`;
 }
+function renderDifficultyToggle(){
+  if(state.matchupDifficulty){
+    return `<p class="help" style="margin:4px 0 14px;">Win rate, expected win rate, and matchup difficulty now shown in the standings table above &mdash; same signals as win predictions, works on completed sessions too.</p>`;
+  }
+  return `
+    <div class="card">
+      <p class="eyebrow">Matchup difficulty</p>
+      <p class="sub" style="margin-top:0;">Adds Expected Win% and a 0-10 Difficulty score to the standings table &mdash; based on rating history, DUPR, and head-to-head record. Works even after the session has ended.</p>
+      <button class="btn btn-outline btn-sm" data-action="compute-difficulty">Show matchup difficulty</button>
+    </div>`;
+}
 function renderPredictionsToggle(){
   if(state.matchPredictions){
     return `<p class="help" style="margin:4px 0 14px;">Win predictions shown on unplayed matches below \u2014 estimates only, blending rating history, DUPR, and head-to-head record.</p>`;
@@ -955,6 +967,55 @@ async function computeMatchPrediction(m, cache){
   const confidence = points<=2 ? "Low" : points<=4 ? "Medium" : "High";
 
   return { probA, probB, favored, scoreline, confidence, signalsUsed: probs.length };
+}
+async function getMatchProbs(m, cache){
+  if(m.prediction && m.prediction.probFavored!=null){
+    const probFav = m.prediction.probFavored;
+    return m.prediction.favored==="A" ? {probA:probFav, probB:1-probFav} : {probA:1-probFav, probB:probFav};
+  }
+  const pred = await computeMatchPrediction(m, cache);
+  return {probA: pred.probA, probB: pred.probB};
+}
+async function computeSessionDifficulty(){
+  const t = state.tournament;
+  showToast("Calculating matchup difficulty\u2026");
+  const cache = {tCache:{}, strength:{}, ratingCache:{}};
+  const diffMap = {};
+  const bump = (key, prob) => { if(!diffMap[key]) diffMap[key]={probSum:0,count:0}; diffMap[key].probSum += prob; diffMap[key].count++; };
+
+  if(t.format==="mixer" || (t.format==="freeplay" && t.freeplayMode==="doubles")){
+    for(const r of t.mixerRounds){
+      for(const m of r.matches){
+        if(m.isBye || !m.a || !m.b) continue;
+        const {probA, probB} = await getMatchProbs(m, cache);
+        m.a.players.forEach(pn=>bump(pn, probA));
+        m.b.players.forEach(pn=>bump(pn, probB));
+      }
+    }
+  } else if(t.format==="roundrobin" || (t.format==="freeplay" && t.freeplayMode==="singles")){
+    for(const m of t.matches){
+      if(m.isBye || !m.a || !m.b) continue;
+      const {probA, probB} = await getMatchProbs(m, cache);
+      bump(m.a.id, probA); bump(m.b.id, probB);
+    }
+  } else if(t.format==="groups"){
+    for(const g of t.groups){
+      for(const m of g.matches){
+        if(m.isBye || !m.a || !m.b) continue;
+        const {probA, probB} = await getMatchProbs(m, cache);
+        bump(m.a.id, probA); bump(m.b.id, probB);
+      }
+    }
+  }
+
+  const result = {};
+  Object.keys(diffMap).forEach(k=>{
+    const avgProb = diffMap[k].count ? diffMap[k].probSum/diffMap[k].count : null;
+    result[k] = avgProb!=null ? { expectedWinRate: avgProb, difficulty: (1-avgProb)*10 } : { expectedWinRate:null, difficulty:null };
+  });
+  state.matchupDifficulty = result;
+  render();
+  showToast("Matchup difficulty ready");
 }
 async function computeMatchPredictions(){
   const t = state.tournament;
@@ -2074,6 +2135,7 @@ function renderView(){
     ${renderSessionPredictionsReport(t)}
     ${renderKitchenRatings(t)}
     ${renderPredictionsToggle()}
+    ${renderDifficultyToggle()}
     ${body}
     <div class="chip-group" style="margin-top:10px;">
       <button class="btn btn-outline btn-sm" data-action="copy-link-view">Copy shareable link</button>
@@ -2606,13 +2668,20 @@ function nameLinks(label){
 }
 function renderStandingsTable(standings, advanceCount){
   if(!standings.length) return "";
+  const diffMap = state.matchupDifficulty;
   return `
     <div class="table-scroll"><table>
-      <tr><th>#</th><th>Player</th><th>W-L</th><th>+/-</th><th>Pts</th></tr>
-      ${standings.map((s,i)=>`
+      <tr><th>#</th><th>Player</th><th>W-L</th><th>Win%</th><th>+/-</th><th>Pts</th>${diffMap ? "<th>Expected Win%</th><th>Difficulty</th>" : ""}</tr>
+      ${standings.map((s,i)=>{
+        const played = s.won+s.lost;
+        const winPct = played ? Math.round((s.won/played)*100) : 0;
+        const d = diffMap ? diffMap[s.id] : null;
+        return `
         <tr class="${advanceCount && i<advanceCount ? "leader":""}">
-          <td>${i+1}</td><td>${nameLinks(s.label)}</td><td>${s.won}-${s.lost}</td><td>${s.pf-s.pa>0?"+":""}${s.pf-s.pa}</td><td>${s.pts}</td>
-        </tr>`).join("")}
+          <td>${i+1}</td><td>${nameLinks(s.label)}</td><td>${s.won}-${s.lost}</td><td>${winPct}%</td><td>${s.pf-s.pa>0?"+":""}${s.pf-s.pa}</td><td>${s.pts}</td>
+          ${diffMap ? `<td>${d && d.expectedWinRate!=null ? Math.round(d.expectedWinRate*100)+"%" : "&mdash;"}</td><td>${d && d.difficulty!=null ? d.difficulty.toFixed(1) : "&mdash;"}</td>` : ""}
+        </tr>`;
+      }).join("")}
     </table></div>`;
 }
 function renderMatchList(matches, t, ctx, editable){
@@ -2853,7 +2922,7 @@ async function addPlayerToSession(){
   await upsertPlayers([{name, dupr}]);
   await addToPlayerIndex(name, t.code);
   state.playerDb = await loadPlayerDb();
-  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null; state.matchupDifficulty = null;
   render();
   showToast(`${name} added to the session`);
 }
@@ -2898,7 +2967,7 @@ async function addManualMatch(){
   }
 
   await saveTournament(t);
-  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null; state.matchupDifficulty = null;
   render();
   showToast("Match added");
 }
@@ -2981,7 +3050,7 @@ function bindEvents(){
     else if(action==="save-score") await handleSaveScore(el.dataset.mid, el.dataset.ctx);
     else if(action==="search-profile") await openProfile(document.getElementById("profileSearchInput").value.trim());
     else if(action==="view-profile") await openProfile(el.dataset.name);
-    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; state.matchPredictions=null; render(); startPolling(); }
+    else if(action==="view-profile-code") { state.tCode = el.dataset.code; nav("view"); state.loading=true; render(); state.tournament = await loadTournamentByCode(el.dataset.code); state.loading=false; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; state.matchPredictions=null; state.matchupDifficulty=null; render(); startPolling(); }
     else if(action==="share-whatsapp") shareWhatsapp(state.tournament);
     else if(action==="share-whatsapp-view") shareWhatsapp(state.tournament);
     else if(action==="generate-result-card") await generateResultCard();
@@ -3004,6 +3073,7 @@ function bindEvents(){
     else if(action==="add-player-to-session") await addPlayerToSession();
     else if(action==="add-manual-match") await addManualMatch();
     else if(action==="compute-predictions") await computeMatchPredictions();
+    else if(action==="compute-difficulty") await computeSessionDifficulty();
     else if(action==="remove-match") await handleRemoveMatch(el.dataset.mid, el.dataset.ctx);
     else if(action==="start-edit-match") { state.editingMatchId = el.dataset.mid; render(); }
     else if(action==="cancel-edit-match") { state.editingMatchId = null; render(); }
@@ -3632,7 +3702,7 @@ async function handleJoin(inputId){
   state.loading = false;
   state.tournament = t;
   state.tCode = val;
-  state.kitchenRatings = null; state.expandedRating = null; state.editingMatchId = null; state.matchPredictions = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.editingMatchId = null; state.matchPredictions = null; state.matchupDifficulty = null;
   render();
   if(t){ haptic("medium"); startPolling(); }
 }
@@ -3746,7 +3816,7 @@ async function handleSaveScore(mid, ctx){
   if(ctx==="ko") propagateBracket(t.bracket);
 
   await saveTournament(t);
-  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null; state.matchupDifficulty = null;
   render();
   showToast(wasAlreadyScored ? "Score updated" : "Score saved");
 }
@@ -3770,7 +3840,7 @@ async function handleRemoveMatch(mid, ctx){
   }
   await saveTournament(t);
   haptic("strong");
-  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null; state.matchupDifficulty = null;
   render();
   showToast("Match removed");
 }
@@ -3797,7 +3867,7 @@ async function saveEditMatch(mid, ctx){
   delete match.prediction;
   await saveTournament(t);
   state.editingMatchId = null;
-  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null;
+  state.kitchenRatings = null; state.expandedRating = null; state.matchPredictions = null; state.matchupDifficulty = null;
   render();
   showToast("Match updated");
 }
@@ -3847,7 +3917,7 @@ async function init(){
     const code = hash.replace("#code=","").toUpperCase();
     state.loading = true; state.route="view"; render();
     const t = await loadTournamentByCode(code);
-    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; state.matchPredictions=null;
+    state.loading=false; state.tournament=t; state.tCode=code; state.kitchenRatings=null; state.expandedRating=null; state.editingMatchId=null; state.matchPredictions=null; state.matchupDifficulty=null;
     render();
     if(t) startPolling();
   } else {
