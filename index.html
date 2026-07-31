@@ -1535,13 +1535,14 @@ function recordOpponents(games, opponentCounts){
   });
 }
 function partnershipKey(p1,p2){ return [p1,p2].sort().join("|"); }
-function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnerships){
+function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnerships, sitOutCounts){
   // players: [{name,dupr}] -> rotates partners each round (round-robin partner schedule),
   // then picks the team-vs-team pairing within each round that minimizes strength mismatch
   // AND repeat opponent encounters together, tracked live via opponentCounts/usedPartnerships.
   ratingsMap = ratingsMap || {};
   opponentCounts = opponentCounts || {};
   usedPartnerships = usedPartnerships || new Set();
+  sitOutCounts = sitOutCounts || {};
   const participants = players.map((p,i)=>({id:"mp-"+i, label:p.name, dupr:p.dupr}));
   const partnerRounds = roundRobinPairs(participants);
   const rounds = [];
@@ -1550,7 +1551,11 @@ function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnershi
     const realPairs = teamsRaw.filter(pair=>!pair[0].bye && !pair[1].bye);
     const byePair = teamsRaw.find(pair=>pair[0].bye||pair[1].bye);
     const sitOut = [];
-    if(byePair) sitOut.push(byePair[0].bye ? byePair[1].label : byePair[0].label);
+    if(byePair){
+      const byeName = byePair[0].bye ? byePair[1].label : byePair[0].label;
+      sitOut.push(byeName);
+      sitOutCounts[byeName] = (sitOutCounts[byeName]||0)+1;
+    }
     let teams = realPairs.map((pair,ti)=>{
       const r1 = ratingsMap[pair[0].label], r2 = ratingsMap[pair[1].label];
       const strength = ((r1!=null?r1:50) + (r2!=null?r2:50)) / 2;
@@ -1559,13 +1564,18 @@ function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnershi
     });
     let thisRoundSitOut = new Set();
     if(teams.length%2!==0){
-      // pick whichever team to sit out doesn't repeat someone who already sat out last round, if avoidable
-      let extraIdx = teams.length-1;
-      for(let i=teams.length-1; i>=0; i--){
-        if(!teams[i].players.some(p=>lastRoundSitOut.has(p))){ extraIdx = i; break; }
+      // priority 1: whoever has sat out the FEWEST times so far (balance the total); priority 2: avoid repeating last round's sit-out
+      let extraIdx = 0, bestScore = Infinity;
+      for(let i=0;i<teams.length;i++){
+        const team = teams[i];
+        const countScore = team.players.reduce((s,p)=>s+(sitOutCounts[p]||0), 0);
+        const consecutivePenalty = team.players.some(p=>lastRoundSitOut.has(p)) ? 1000 : 0;
+        const score = countScore + consecutivePenalty;
+        if(score < bestScore){ bestScore = score; extraIdx = i; }
       }
       const extra = teams.splice(extraIdx,1)[0];
       sitOut.push(...extra.players);
+      extra.players.forEach(p=>{ sitOutCounts[p] = (sitOutCounts[p]||0)+1; });
       thisRoundSitOut = new Set(extra.players);
     }
     lastRoundSitOut = thisRoundSitOut;
@@ -1595,7 +1605,9 @@ function previewPartnershipOverlap(shuffledPlayers, maxGamesNeeded, usedPartners
 function buildTrackersFromMixerRounds(mixerRounds){
   const opponentCounts = {};
   const usedPartnerships = new Set();
+  const sitOutCounts = {};
   mixerRounds.forEach(r=>{
+    (r.sitOut||[]).forEach(p=>{ sitOutCounts[p] = (sitOutCounts[p]||0)+1; });
     r.matches.forEach(m=>{
       usedPartnerships.add(partnershipKey(m.a.players[0], m.a.players[1]));
       usedPartnerships.add(partnershipKey(m.b.players[0], m.b.players[1]));
@@ -1605,7 +1617,7 @@ function buildTrackersFromMixerRounds(mixerRounds){
       }));
     });
   });
-  return {opponentCounts, usedPartnerships};
+  return {opponentCounts, usedPartnerships, sitOutCounts};
 }
 function computeMixerStandings(playerNames, mixerRounds){
   const table={};
@@ -1723,9 +1735,10 @@ function fillRoundRobinToTarget(participants, targetGames){
   return allMatches;
 }
 function fillMixerToTarget(players, targetGames, ratingsMap){
-  if(players.length<4) return generateMixerRounds(players, ratingsMap, {}, new Set());
+  if(players.length<4) return generateMixerRounds(players, ratingsMap, {}, new Set(), {});
   const opponentCounts = {};
   const usedPartnerships = new Set();
+  const sitOutCounts = {};
   let rounds = [];
   let realCount = 0;
   let cycle = 0;
@@ -1743,7 +1756,7 @@ function fillMixerToTarget(players, targetGames, ratingsMap){
       }
       order = bestOrder;
     }
-    const cycleRounds = generateMixerRounds(order, ratingsMap, opponentCounts, usedPartnerships);
+    const cycleRounds = generateMixerRounds(order, ratingsMap, opponentCounts, usedPartnerships, sitOutCounts);
     const maxRound = rounds.length ? Math.max(...rounds.map(r=>r.round)) : 0;
     for(const r of cycleRounds){
       if(realCount >= targetGames) break;
@@ -3022,7 +3035,7 @@ async function addPlayerToSession(){
     });
   } else if(t.format==="mixer"){
     const fullList = t.participants.map(p=>({name:p.label, dupr:p.dupr}));
-    const {opponentCounts, usedPartnerships} = buildTrackersFromMixerRounds(t.mixerRounds);
+    const {opponentCounts, usedPartnerships, sitOutCounts} = buildTrackersFromMixerRounds(t.mixerRounds);
     let bestOrder=null, bestOverlap=Infinity;
     for(let attempt=0; attempt<8; attempt++){
       const candidate = shuffle(fullList);
@@ -3030,7 +3043,7 @@ async function addPlayerToSession(){
       if(overlap<bestOverlap){ bestOverlap=overlap; bestOrder=candidate; }
       if(bestOverlap===0) break;
     }
-    const extra = generateMixerRounds(bestOrder, buildFairnessMap(), opponentCounts, usedPartnerships);
+    const extra = generateMixerRounds(bestOrder, buildFairnessMap(), opponentCounts, usedPartnerships, sitOutCounts);
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-add"+Date.now(); }); });
     assignCourts(extra, t.courts);
@@ -3343,7 +3356,7 @@ async function addMoreGames(){
   if(t.format==="mixer"){
     const maxRound = t.mixerRounds.length ? Math.max(...t.mixerRounds.map(r=>r.round)) : 0;
     const playerList = t.participants.map(p=>({name:p.label, dupr:p.dupr}));
-    const {opponentCounts, usedPartnerships} = buildTrackersFromMixerRounds(t.mixerRounds);
+    const {opponentCounts, usedPartnerships, sitOutCounts} = buildTrackersFromMixerRounds(t.mixerRounds);
     let bestOrder=null, bestOverlap=Infinity;
     for(let attempt=0; attempt<8; attempt++){
       const candidate = shuffle(playerList);
@@ -3351,7 +3364,7 @@ async function addMoreGames(){
       if(overlap<bestOverlap){ bestOverlap=overlap; bestOrder=candidate; }
       if(bestOverlap===0) break;
     }
-    const extra = generateMixerRounds(bestOrder, buildFairnessMap(), opponentCounts, usedPartnerships);
+    const extra = generateMixerRounds(bestOrder, buildFairnessMap(), opponentCounts, usedPartnerships, sitOutCounts);
     extra.forEach(r=>{ r.round += maxRound; r.matches.forEach(m=>{ m.round=r.round; m.id=m.id+"-x"+maxRound; }); });
     assignCourts(extra, t.courts);
     t.mixerRounds = t.mixerRounds.concat(extra);
