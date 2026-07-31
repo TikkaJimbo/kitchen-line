@@ -330,6 +330,7 @@ const SL_LOCATIONS = [
 ];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0/I/1
 const PLAYER_DB_KEY = "pickleball-lk-players";
+const PLAYER_LISTS_KEY = "kitchen-line-player-lists";
 
 /* ============================= STATE ============================= */
 let state = {
@@ -367,7 +368,9 @@ let state = {
   matchPredictions: null,
   predictionReport: null,
   predictionReportRun: false,
-  matchupDifficulty: null
+  matchupDifficulty: null,
+  playerLists: [],
+  listBuilder: { name: "", players: [] }
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -420,6 +423,14 @@ async function upsertPlayers(newPlayers){
   });
   await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
   return db;
+}
+async function loadPlayerLists(){
+  const raw = await storeGet(PLAYER_LISTS_KEY, true);
+  if(!raw) return [];
+  try{ return JSON.parse(raw); }catch(e){ return []; }
+}
+async function savePlayerLists(lists){
+  await storeSet(PLAYER_LISTS_KEY, JSON.stringify(lists), true);
 }
 async function addToPlayerIndex(name, code){
   const key = "player-tournaments:"+name.toLowerCase();
@@ -1533,7 +1544,9 @@ function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnershi
   usedPartnerships = usedPartnerships || new Set();
   const participants = players.map((p,i)=>({id:"mp-"+i, label:p.name, dupr:p.dupr}));
   const partnerRounds = roundRobinPairs(participants);
-  return partnerRounds.map((teamsRaw, ri)=>{
+  const rounds = [];
+  let lastRoundSitOut = new Set();
+  partnerRounds.forEach((teamsRaw, ri)=>{
     const realPairs = teamsRaw.filter(pair=>!pair[0].bye && !pair[1].bye);
     const byePair = teamsRaw.find(pair=>pair[0].bye||pair[1].bye);
     const sitOut = [];
@@ -1544,7 +1557,18 @@ function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnershi
       usedPartnerships.add(partnershipKey(pair[0].label, pair[1].label));
       return { id:"team-r"+ri+"-"+ti, label:pair[0].label+" & "+pair[1].label, players:[pair[0].label, pair[1].label], _strength: strength };
     });
-    if(teams.length%2!==0){ const extra=teams.pop(); sitOut.push(...extra.players); }
+    let thisRoundSitOut = new Set();
+    if(teams.length%2!==0){
+      // pick whichever team to sit out doesn't repeat someone who already sat out last round, if avoidable
+      let extraIdx = teams.length-1;
+      for(let i=teams.length-1; i>=0; i--){
+        if(!teams[i].players.some(p=>lastRoundSitOut.has(p))){ extraIdx = i; break; }
+      }
+      const extra = teams.splice(extraIdx,1)[0];
+      sitOut.push(...extra.players);
+      thisRoundSitOut = new Set(extra.players);
+    }
+    lastRoundSitOut = thisRoundSitOut;
     const arrangement = pickBestArrangement(teams, opponentCounts);
     recordOpponents(arrangement, opponentCounts);
     const matches = arrangement.map((pair,gi)=>{
@@ -1552,8 +1576,9 @@ function generateMixerRounds(players, ratingsMap, opponentCounts, usedPartnershi
       const bClean = {id:pair[1].id, label:pair[1].label, players:pair[1].players};
       return {id:"mx-"+ri+"-"+gi, round:ri+1, a:aClean, b:bClean, scoreA:null, scoreB:null, winner:null, isBye:false};
     });
-    return {round:ri+1, matches, sitOut};
+    rounds.push({round:ri+1, matches, sitOut});
   });
+  return rounds;
 }
 function previewPartnershipOverlap(shuffledPlayers, maxGamesNeeded, usedPartnerships){
   const participants = shuffledPlayers.map((p,i)=>({id:"x"+i, label:p.name}));
@@ -1968,6 +1993,11 @@ function renderCreate(){
       <p class="eyebrow">Step 2</p>
       <h2>Who's playing?</h2>
       <p class="sub">Names are remembered for next time &mdash; start typing to pull up regulars. DUPR is optional.</p>
+      ${state.playerLists && state.playerLists.length ? `
+      <div class="join-row" style="margin-bottom:16px;">
+        <select id="load-list-select">${state.playerLists.map(l=>`<option value="${l.id}">${l.name} (${l.players.length})</option>`).join("")}</select>
+        <button class="btn btn-outline" data-action="load-player-list">Load list</button>
+      </div>` : ""}
       <div class="player-add-row">
         <div class="field">
           <label>Player name</label>
@@ -2648,6 +2678,30 @@ function renderAdminDashboard(){
       </div>
     </div>
     <div class="card">
+      <p class="eyebrow">Playing lists</p>
+      <p class="sub" style="margin-top:0;">Save a named group of regulars (e.g. "Tuesday Crew") so adding them to a new session is one tap instead of typing everyone in again.</p>
+      <div class="field"><label>List name</label><input type="text" id="list-name" placeholder="e.g. Tuesday Crew" value="${state.listBuilder.name||""}"></div>
+      <div class="player-add-row">
+        <div class="field"><label>Add player to this list</label><input type="text" id="list-player-name" list="playerNamesHome" placeholder="Player name"></div>
+        <button class="btn btn-outline btn-sm" data-action="add-to-list-builder" style="height:44px;">Add</button>
+      </div>
+      ${state.listBuilder.players.length ? `
+        <div class="chip-group" style="margin-bottom:14px;">
+          ${state.listBuilder.players.map((p,i)=>`<span class="chip active" data-action="remove-from-list-builder" data-idx="${i}" style="cursor:pointer;">${p} &times;</span>`).join("")}
+        </div>` : `<p class="help">No players added to this list yet.</p>`}
+      <button class="btn btn-ink btn-wide" data-action="save-player-list">Save list</button>
+      ${state.playerLists.length ? `
+        <p class="eyebrow" style="margin-top:20px;">Saved lists</p>
+        ${state.playerLists.map(l=>`
+          <div class="match-card">
+            <div style="flex:2; min-width:180px;">
+              <div style="font-weight:800;">${l.name}</div>
+              <div class="help" style="margin:2px 0 0;">${l.players.length} player${l.players.length===1?"":"s"}: ${l.players.join(", ")}</div>
+            </div>
+            <button class="remove-btn" data-action="delete-player-list" data-id="${l.id}">Delete</button>
+          </div>`).join("")}` : ""}
+    </div>
+    <div class="card">
       <p class="eyebrow">Clean up shared player list</p>
       <div class="join-row">
         <input type="text" id="admin-remove-player" list="playerNamesHome" placeholder="Player name to remove" style="text-transform:none; font-family:'Manrope',sans-serif;">
@@ -3137,6 +3191,7 @@ function bindEvents(){
     else if(action==="toggle-rating-detail") { state.expandedRating = state.expandedRating===el.dataset.name ? null : el.dataset.name; render(); }
     else if(action==="add-freeplay-match") await addFreeplayMatch();
     else if(action==="add-player-to-session") await addPlayerToSession();
+    else if(action==="load-player-list") loadPlayerListIntoForm();
     else if(action==="add-manual-match") await addManualMatch();
     else if(action==="compute-predictions") await computeMatchPredictions();
     else if(action==="compute-difficulty") await computeSessionDifficulty();
@@ -3155,6 +3210,10 @@ function bindEvents(){
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
     else if(action==="run-prediction-report") await runPredictionReport();
     else if(action==="admin-add-player") await adminAddPlayer();
+    else if(action==="add-to-list-builder") adminAddToListBuilder();
+    else if(action==="remove-from-list-builder") adminRemoveFromListBuilder(+el.dataset.idx);
+    else if(action==="save-player-list") await adminSaveList();
+    else if(action==="delete-player-list") await adminDeleteList(el.dataset.id);
   };
 }
 
@@ -3407,6 +3466,7 @@ async function openAdmin(){
   stopPolling();
   state.route = "admin";
   if(state.adminUser){
+    state.playerLists = await loadPlayerLists();
     await loadAdminSessions();
   } else {
     render();
@@ -3570,6 +3630,41 @@ async function adminAddPlayer(){
   showToast(`Added ${name}`);
   render();
 }
+function adminAddToListBuilder(){
+  const nameEl = document.getElementById("list-player-name");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Enter a player name"); return; }
+  if(state.listBuilder.players.some(p=>p.toLowerCase()===name.toLowerCase())){ showToast("Already in this list"); return; }
+  state.listBuilder.players.push(name);
+  nameEl.value = "";
+  render();
+}
+function adminRemoveFromListBuilder(idx){
+  state.listBuilder.players.splice(idx,1);
+  render();
+}
+async function adminSaveList(){
+  const nameEl = document.getElementById("list-name");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Give this list a name"); return; }
+  if(state.listBuilder.players.length<1){ showToast("Add at least one player first"); return; }
+  const lists = await loadPlayerLists();
+  lists.push({ id:"list-"+Date.now(), name, players: state.listBuilder.players.slice() });
+  await savePlayerLists(lists);
+  state.playerLists = lists;
+  state.listBuilder = { name:"", players:[] };
+  showToast(`Saved "${name}"`);
+  render();
+}
+async function adminDeleteList(id){
+  if(!confirm("Delete this playing list? This only removes the saved list, not any player's match history.")) return;
+  let lists = await loadPlayerLists();
+  lists = lists.filter(l=>l.id!==id);
+  await savePlayerLists(lists);
+  state.playerLists = lists;
+  showToast("List deleted");
+  render();
+}
 async function adminSaveDupr(name){
   const inputs = document.querySelectorAll(".admin-dupr-input");
   let el = null;
@@ -3669,7 +3764,10 @@ function resetForm(){
     matchType:"singles", format:"roundrobin", groupSize:4, advancePerGroup:2, players:[], teams:[], pairSelection:null, playersConfirmed:false, crownChampion:true, replacingIdx:null };
   syncFormOnce();
 }
-async function syncFormOnce(){ state.playerDb = await loadPlayerDb(); }
+async function syncFormOnce(){
+  state.playerDb = await loadPlayerDb();
+  state.playerLists = await loadPlayerLists();
+}
 
 /* read-back form inputs before actions that need current values */
 function pullFormInputs(){
@@ -3722,6 +3820,23 @@ function saveReplacePlayer(idx){
   f.replacingIdx = null;
   f.playersConfirmed = false;
   showToast(`Replaced ${outgoing.name} with ${name}`);
+  render();
+}
+function loadPlayerListIntoForm(){
+  const selectEl = document.getElementById("load-list-select");
+  if(!selectEl) return;
+  const list = (state.playerLists||[]).find(l=>l.id===selectEl.value);
+  if(!list) return;
+  let added = 0;
+  list.players.forEach(name=>{
+    if(!state.form.players.some(p=>p.name.toLowerCase()===name.toLowerCase())){
+      const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
+      state.form.players.push({name, dupr: dbEntry ? dbEntry.dupr : null});
+      added++;
+    }
+  });
+  state.form.playersConfirmed = false;
+  showToast(added ? `Loaded ${added} player${added===1?"":"s"} from "${list.name}"` : `Everyone from "${list.name}" is already added`);
   render();
 }
 function addPlayer(){
