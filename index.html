@@ -408,6 +408,7 @@ let state = {
   lsPlacements: { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null },
   lsSelectedChip: null,
   lsMatch: null,
+  lsMatchCode: null,
   refereeAuthed: false
 };
 
@@ -439,6 +440,29 @@ async function storeSet(key, value, shared){
 async function codeTaken(code){
   const v = await storeGet("tourney-"+code, true);
   return v !== null;
+}
+async function matchCodeTaken(code){
+  const v = await storeGet("typickle-match-"+code, true);
+  return v !== null;
+}
+async function generateUniqueMatchCode(){
+  for(let i=0;i<12;i++){
+    let c=""; for(let j=0;j<5;j++) c+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];
+    if(!(await matchCodeTaken(c))) return c;
+  }
+  return ("TM"+Date.now()).slice(-6);
+}
+async function saveLiveMatch(code, match){
+  await storeSet("typickle-match-"+code, JSON.stringify(match), true);
+}
+function persistMatch(){
+  if(!state.lsMatchCode || !state.lsMatch) return;
+  saveLiveMatch(state.lsMatchCode, state.lsMatch).catch(()=>{ showToast("\u26a0\ufe0f Couldn't save \u2014 check your connection"); });
+}
+async function loadLiveMatch(code){
+  const raw = await storeGet("typickle-match-"+code, true);
+  if(!raw) return null;
+  try{ return JSON.parse(raw); }catch(e){ return null; }
 }
 async function generateUniqueCode(){
   for(let i=0;i<12;i++){
@@ -1184,6 +1208,24 @@ function lsGoToPositioning(){
   state.lsStep = "position";
   render();
 }
+async function openLiveScoring(){
+  state.route = "livescore";
+  if(!state.lsMatch && state.refereeAuthed){
+    let savedCode = null;
+    try{ savedCode = localStorage.getItem("typickle-current-match"); }catch(e){}
+    if(savedCode){
+      const saved = await loadLiveMatch(savedCode);
+      if(saved){
+        state.lsMatch = saved;
+        state.lsMatchCode = savedCode;
+        showToast("Resumed your in-progress match");
+      } else {
+        try{ localStorage.removeItem("typickle-current-match"); }catch(e){}
+      }
+    }
+  }
+  render();
+}
 function lsPlayerTeam(name){
   return state.lsSetup.teamAPlayers.includes(name) ? "a" : "b";
 }
@@ -1227,7 +1269,7 @@ function lsSwapReceivingPair(){
   haptic("light");
   render();
 }
-function lsConfirmStart(){
+async function lsConfirmStart(){
   const layout = lsComputeLayout(state.lsSetup);
   const initialPositions = { a:{}, b:{} };
   Object.keys(layout.quadrants).forEach(k=>{
@@ -1238,6 +1280,14 @@ function lsConfirmStart(){
   const firstServer = state.lsPlacements[servingQuadKey];
   const setup = Object.assign({}, state.lsSetup, { firstServer, initialPositions });
   state.lsMatch = lsCreateMatch(setup);
+  state.lsMatchCode = await generateUniqueMatchCode();
+  try{ localStorage.setItem("typickle-current-match", state.lsMatchCode); }catch(e){}
+  try{
+    await saveLiveMatch(state.lsMatchCode, state.lsMatch);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save the match \u2014 check your connection and try again");
+    return;
+  }
   haptic("medium");
   render();
 }
@@ -3682,7 +3732,7 @@ function bindEvents(){
     else if(action==="go-back-from-profile") await goBackFromProfile();
     else if(action==="go-sessions") await openSessionViewer();
     else if(action==="go-partnerships") openPartnerships();
-    else if(action==="go-livescore") { state.route="livescore"; render(); }
+    else if(action==="go-livescore") await openLiveScoring();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
     else if(action==="ls-back-to-settings") { state.lsStep="settings"; render(); }
@@ -3691,13 +3741,13 @@ function bindEvents(){
     else if(action==="ls-unplace") lsUnplacePlayer(el.dataset.name);
     else if(action==="ls-swap-servers") lsSwapServingPair();
     else if(action==="ls-swap-receivers") lsSwapReceivingPair();
-    else if(action==="ls-confirm-start") lsConfirmStart();
-    else if(action==="ls-point") { state.lsMatch = lsApplyMatchRally(state.lsMatch, el.dataset.team); haptic("light"); render(); }
-    else if(action==="ls-undo") { state.lsMatch = lsUndoMatchRally(state.lsMatch); haptic("medium"); render(); }
-    else if(action==="ls-switch-sides") { const m=state.lsMatch; const idx=m.games.length-1; m.games[idx] = lsSwitchSides(m.games[idx]); haptic("medium"); render(); }
-    else if(action==="ls-start-next-game") { state.lsMatch = lsStartNextGame(state.lsMatch); haptic("medium"); render(); }
-    else if(action==="ls-rematch") { state.lsMatch = lsCreateMatch(state.lsMatch.matchSetup); haptic("medium"); render(); }
-    else if(action==="ls-back-to-setup") { state.lsMatch = null; state.lsStep="settings"; state.lsPlacements={topLeft:null,bottomLeft:null,topRight:null,bottomRight:null}; state.lsSelectedChip=null; render(); }
+    else if(action==="ls-confirm-start") await lsConfirmStart();
+    else if(action==="ls-point") { state.lsMatch = lsApplyMatchRally(state.lsMatch, el.dataset.team); haptic("light"); render(); persistMatch(); }
+    else if(action==="ls-undo") { state.lsMatch = lsUndoMatchRally(state.lsMatch); haptic("medium"); render(); persistMatch(); }
+    else if(action==="ls-switch-sides") { const m=state.lsMatch; const idx=m.games.length-1; m.games[idx] = lsSwitchSides(m.games[idx]); haptic("medium"); render(); persistMatch(); }
+    else if(action==="ls-start-next-game") { state.lsMatch = lsStartNextGame(state.lsMatch); haptic("medium"); render(); persistMatch(); }
+    else if(action==="ls-rematch") { state.lsMatch = lsCreateMatch(state.lsMatch.matchSetup); state.lsMatchCode = await generateUniqueMatchCode(); try{ localStorage.setItem("typickle-current-match", state.lsMatchCode); }catch(e){} haptic("medium"); render(); persistMatch(); }
+    else if(action==="ls-back-to-setup") { state.lsMatch = null; state.lsMatchCode = null; try{ localStorage.removeItem("typickle-current-match"); }catch(e){} state.lsStep="settings"; state.lsPlacements={topLeft:null,bottomLeft:null,topRight:null,bottomRight:null}; state.lsSelectedChip=null; render(); }
     else if(action==="compute-partnerships") await computePartnerships();
     else if(action==="toggle-partnership-detail") { const idx=+el.dataset.idx; state.expandedPartnership = state.expandedPartnership===idx ? null : idx; render(); }
     else if(action==="run-h2h") await runH2H();
@@ -4627,7 +4677,15 @@ async function init(){
     render();
     if(t) startPolling();
   } else {
-    render();
+    let resumeCode = null;
+    try{
+      if(state.refereeAuthed) resumeCode = localStorage.getItem("typickle-current-match");
+    }catch(e){}
+    if(resumeCode){
+      await openLiveScoring();
+    } else {
+      render();
+    }
   }
 }
 init();
