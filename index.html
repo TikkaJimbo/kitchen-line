@@ -1245,15 +1245,16 @@ function lsCreateInitialGameState(setup){
   }
   return {
     setup, scoreA:0, scoreB:0, servingTeam, serverNum:1, isFirstServe:true,
-    currentServer: firstServer, positions, winTarget, winBy, rallyLog:[], gameOver:false, winner:null,
+    currentServer: firstServer, positions, winTarget, winBy, eventLog:[], gameOver:false, winner:null,
     orientation: setup.orientation, sidesSwitched: false
   };
 }
 function lsSwitchSides(state){
-  return Object.assign({}, state, {
-    orientation: state.orientation==="left" ? "right" : "left",
-    sidesSwitched: true
-  });
+  const next = JSON.parse(JSON.stringify(state));
+  next.orientation = next.orientation==="left" ? "right" : "left";
+  next.sidesSwitched = true;
+  next.eventLog.push({ type:"switch" });
+  return next;
 }
 function lsSwitchThreshold(winTarget){ return Math.ceil(winTarget/2); }
 function lsSideOut(state){
@@ -1265,7 +1266,7 @@ function lsApplyRally(state, rallyWinnerTeam){
   if(state.gameOver) return state;
   const next = JSON.parse(JSON.stringify(state));
   const servingTeam = next.servingTeam;
-  next.rallyLog.push({ servingTeam, serverNum: next.serverNum, server: next.currentServer, rallyWinner: rallyWinnerTeam, scoreABefore: next.scoreA, scoreBBefore: next.scoreB });
+  next.eventLog.push({ type:"rally", servingTeam, serverNum: next.serverNum, server: next.currentServer, rallyWinner: rallyWinnerTeam, scoreABefore: next.scoreA, scoreBBefore: next.scoreB });
   if(rallyWinnerTeam === servingTeam){
     if(servingTeam==='a') next.scoreA++; else next.scoreB++;
     const p = next.positions[servingTeam];
@@ -1288,12 +1289,13 @@ function lsApplyRally(state, rallyWinnerTeam){
   return next;
 }
 function lsUndoLastRally(state){
-  if(!state.rallyLog.length) return state;
-  const remaining = state.rallyLog.slice(0,-1);
+  if(!state.eventLog.length) return state;
+  const remaining = state.eventLog.slice(0,-1);
   let fresh = lsCreateInitialGameState(state.setup);
-  remaining.forEach(entry=>{ fresh = lsApplyRally(fresh, entry.rallyWinner); });
-  fresh.orientation = state.orientation;
-  fresh.sidesSwitched = state.sidesSwitched;
+  remaining.forEach(event=>{
+    if(event.type==="rally") fresh = lsApplyRally(fresh, event.rallyWinner);
+    else if(event.type==="switch") fresh = lsSwitchSides(fresh);
+  });
   return fresh;
 }
 function lsScoreLabel(state){
@@ -2860,9 +2862,9 @@ function renderLiveScoreActive(){
           <button class="ls-point-btn" data-action="ls-point" data-team="${layout.leftTeam}">Rally Winner<br><b>Team ${layout.leftTeam==="a"?"A":"B"}</b></button>
           <button class="ls-point-btn" data-action="ls-point" data-team="${layout.rightTeam}">Rally Winner<br><b>Team ${layout.rightTeam==="a"?"A":"B"}</b></button>
         </div>
-        <button class="btn btn-outline btn-wide" data-action="ls-undo" ${g.rallyLog.length===0?"disabled":""}>Undo last rally</button>
+        <button class="btn btn-outline btn-wide" data-action="ls-undo" ${g.eventLog.length===0?"disabled":""}>Undo last rally</button>
       `}
-      <p class="help" style="margin-top:14px; text-align:center;">${g.rallyLog.length} rall${g.rallyLog.length===1?"y":"ies"} recorded this game &middot; win to ${g.winTarget}, win by ${g.winBy}</p>
+      <p class="help" style="margin-top:14px; text-align:center;">${g.eventLog.filter(e=>e.type==="rally").length} rall${g.eventLog.filter(e=>e.type==="rally").length===1?"y":"ies"} recorded this game &middot; win to ${g.winTarget}, win by ${g.winBy}</p>
     </div>`;
 }
 function renderPartnershipsPage(){
