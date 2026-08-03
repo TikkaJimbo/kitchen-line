@@ -189,7 +189,7 @@
   .ls-score-num{font-family:'Oswald',sans-serif; font-weight:600; font-size:52px; color:var(--ink); line-height:1;}
   .ls-serving-note{font-size:13px; color:var(--muted); font-weight:700; margin-top:6px;}
   .ls-serving-note b{color:var(--ink);}
-  .ls-position-court{display:flex; border:2px solid var(--ink); border-radius:12px; overflow:hidden; margin-bottom:16px; min-height:220px;}
+  .ls-position-court{display:flex; border:2px solid var(--ink); border-radius:12px; overflow:hidden; margin-bottom:16px; aspect-ratio:44/20;}
   .ls-position-col{flex:1; display:flex; flex-direction:column;}
   .ls-quad{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:14px 8px; background:var(--paper); border-bottom:1px dashed var(--line); position:relative;}
   .ls-position-col .ls-quad:last-child{border-bottom:none;}
@@ -1169,9 +1169,19 @@ function lsGoToPositioning(){
   state.lsStep = "position";
   render();
 }
+function lsPlayerTeam(name){
+  return state.lsSetup.teamAPlayers.includes(name) ? "a" : "b";
+}
 function lsPlacePlayer(key){
   if(state.lsPlacements[key]) return; // occupied slots don't accept a new placement; remove via the chip's own x first
   if(!state.lsSelectedChip){ showToast("Tap a player name first"); return; }
+  const layout = lsComputeLayout(state.lsSetup);
+  const requiredTeam = layout.quadrants[key].team;
+  const playerTeam = lsPlayerTeam(state.lsSelectedChip);
+  if(playerTeam !== requiredTeam){
+    showToast(`${state.lsSelectedChip} is on Team ${playerTeam==="a"?"A":"B"} \u2014 that spot is for Team ${requiredTeam==="a"?"A":"B"}`);
+    return;
+  }
   state.lsPlacements[key] = state.lsSelectedChip;
   state.lsSelectedChip = null;
   haptic("light");
@@ -2771,8 +2781,9 @@ function renderLiveScorePositioning(){
     const courtLabel = q.courtSide==="right" ? "Right Court" : "Left Court";
     const occupant = state.lsPlacements[key];
     const selected = state.lsSelectedChip;
+    const isValidTarget = selected && !occupant && lsPlayerTeam(selected)===q.team;
     return `
-      <div class="ls-quad ${occupant?'filled':''} ${selected&&!occupant?'targetable':''}" data-action="ls-place" data-key="${key}">
+      <div class="ls-quad ${occupant?'filled':''} ${isValidTarget?'targetable':''}" data-action="ls-place" data-key="${key}">
         <span class="ls-quad-team">${teamLabel}</span>
         <span class="ls-quad-court">${courtLabel}</span>
         <span class="ls-quad-occupant">${occupant||'&mdash;'}</span>
