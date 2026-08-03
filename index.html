@@ -409,7 +409,13 @@ let state = {
   lsSelectedChip: null,
   lsMatch: null,
   lsMatchCode: null,
-  refereeAuthed: false
+  refereeAuthed: false,
+  typickleSetup: {
+    eventName: "Typickle Tournament 1.0",
+    players: [], teams: [], pairSelection: null,
+    groupCount: 4, qualifiersPerGroup: 1, hasThirdPlacePlayoff: true
+  },
+  typickleCreated: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -436,6 +442,38 @@ async function storeSet(key, value, shared){
     if(error){ console.error("storeSet failed", error); return null; }
     return true;
   }catch(e){ console.error("storeSet failed", e); return null; }
+}
+const TYPICKLE_EVENT_PREFIX = "typickle-event-";
+async function generateUniqueEventCode(){
+  for(let i=0;i<12;i++){
+    let c=""; for(let j=0;j<5;j++) c+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];
+    const v = await storeGet(TYPICKLE_EVENT_PREFIX+c, true);
+    if(v===null) return c;
+  }
+  return ("TE"+Date.now()).slice(-6);
+}
+async function saveTypickleEvent(code, event){
+  await storeSet(TYPICKLE_EVENT_PREFIX+code, JSON.stringify(event), true);
+}
+async function loadTypickleEvent(code){
+  const raw = await storeGet(TYPICKLE_EVENT_PREFIX+code, true);
+  if(!raw) return null;
+  try{ return JSON.parse(raw); }catch(e){ return null; }
+}
+function makeTypickleGroups(teams, groupCount){
+  let sorted = teams.slice().sort((a,b)=>(b.seedDupr||0)-(a.seedDupr||0));
+  const groups = Array.from({length:groupCount}, ()=>[]);
+  let dir=1, g=0;
+  sorted.forEach(t=>{
+    groups[g].push(t);
+    if(dir===1){ if(g===groupCount-1) dir=-1; else g++; }
+    else { if(g===0) dir=1; else g--; }
+  });
+  return groups.map((gTeams,i)=>({
+    id:"G"+(i+1), label:"Group "+String.fromCharCode(65+i),
+    teamIds: gTeams.map(t=>t.id),
+    matches: []
+  }));
 }
 async function codeTaken(code){
   const v = await storeGet("tourney-"+code, true);
@@ -1179,6 +1217,94 @@ async function computeMatchPredictions(){
   showToast("Predictions ready");
 }
 /* ============================= LIVE SCORING ENGINE (tested standalone, see build notes) ============================= */
+function typickleAddPlayer(){
+  const nameEl = document.getElementById("typickle-player-name");
+  const duprEl = document.getElementById("typickle-player-dupr");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Enter a player name"); return; }
+  const f = state.typickleSetup;
+  if(f.players.some(p=>p.name.toLowerCase()===name.toLowerCase())){ showToast("Already added"); return; }
+  const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
+  const duprVal = duprEl.value.trim();
+  const dupr = duprVal ? parseFloat(duprVal) : (dbEntry ? dbEntry.dupr : null);
+  f.players.push({name, dupr});
+  nameEl.value=""; duprEl.value="";
+  render();
+}
+function typickleRemovePlayer(idx){
+  const f = state.typickleSetup;
+  const removed = f.players[idx];
+  f.players.splice(idx,1);
+  f.teams = f.teams.filter(t=>!t.players.includes(removed.name));
+  render();
+}
+function handleTypicklePairPick(name){
+  const f = state.typickleSetup;
+  if(f.pairSelection===null){ f.pairSelection = name; render(); return; }
+  if(f.pairSelection===name){ f.pairSelection=null; render(); return; }
+  f.teams.push({ players:[f.pairSelection, name], name:`Team ${f.teams.length+1}` });
+  f.pairSelection=null;
+  haptic("light");
+  render();
+}
+function typickleAutoPair(balanced){
+  const f = state.typickleSetup;
+  const paired = new Set(f.teams.flatMap(t=>t.players));
+  let pool = f.players.filter(p=>!paired.has(p.name));
+  if(balanced && pool.some(p=>p.dupr)){
+    pool = pool.slice().sort((a,b)=>(b.dupr||0)-(a.dupr||0));
+    while(pool.length>=2){ const hi=pool.shift(); const lo=pool.pop(); f.teams.push({players:[hi.name, lo.name], name:`Team ${f.teams.length+1}`}); }
+  } else {
+    pool = shuffle(pool);
+    while(pool.length>=2){ f.teams.push({players:[pool.pop().name, pool.pop().name], name:`Team ${f.teams.length+1}`}); }
+  }
+  haptic("medium");
+  render();
+}
+function typickleRenameTeam(idx){
+  const input = document.getElementById("typickle-team-name-"+idx);
+  const val = input.value.trim();
+  state.typickleSetup.teams[idx].name = val || `Team ${idx+1}`;
+}
+function typickleRemoveTeam(idx){
+  state.typickleSetup.teams.splice(idx,1);
+  render();
+}
+async function createTypickleEvent(){
+  const f = state.typickleSetup;
+  const nameEl = document.getElementById("typickle-name");
+  f.eventName = nameEl.value.trim() || "Typickle Tournament 1.0";
+  f.groupCount = +document.getElementById("typickle-group-count").value;
+  f.qualifiersPerGroup = +document.getElementById("typickle-qualifiers").value;
+  f.hasThirdPlacePlayoff = document.getElementById("typickle-thirdplace").checked;
+
+  const teams = f.teams.map((teamEntry,i)=>{
+    const pair = teamEntry.players;
+    const p1 = f.players.find(p=>p.name===pair[0]);
+    const p2 = f.players.find(p=>p.name===pair[1]);
+    const duprs = [p1&&p1.dupr, p2&&p2.dupr].filter(d=>d!=null);
+    const seedDupr = duprs.length ? duprs.reduce((a,b)=>a+b,0)/duprs.length : null;
+    return { id:"team"+(i+1), name: teamEntry.name || `Team ${i+1}`, players: pair, seedDupr };
+  });
+  const groups = makeTypickleGroups(teams, f.groupCount);
+
+  const code = await generateUniqueEventCode();
+  const event = {
+    code, name: f.eventName, createdAt: new Date().toISOString(),
+    status: "groups",
+    settings: { groupCount: f.groupCount, qualifiersPerGroup: f.qualifiersPerGroup, hasThirdPlacePlayoff: f.hasThirdPlacePlayoff },
+    teams, groups, bracket: null
+  };
+  try{
+    await saveTypickleEvent(code, event);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save the event \u2014 check your connection and try again");
+    return;
+  }
+  state.typickleCreated = event;
+  haptic("medium");
+  render();
+}
 async function submitRefereeCode(){
   const input = document.getElementById("referee-code-input");
   const entered = input.value.trim();
@@ -2164,6 +2290,7 @@ function render(){
   else if(state.route==="sessions") view.innerHTML = renderSessionViewer();
   else if(state.route==="partnerships") view.innerHTML = renderPartnershipsPage();
   else if(state.route==="livescore") view.innerHTML = renderLiveScorePage();
+  else if(state.route==="typickle-setup") view.innerHTML = renderTypickleSetup();
   bindEvents();
 }
 
@@ -2209,7 +2336,16 @@ function renderHome(){
         <button class="btn btn-outline btn-sm" data-action="go-leaderboard">View full leaderboard</button>
         <button class="btn btn-outline btn-sm" data-action="go-h2h">Head-to-head</button>
         <button class="btn btn-outline btn-sm" data-action="go-partnerships">Top Partnerships</button>
+      </div>
+    </div>
+
+    <div class="card" style="border-color:var(--court);">
+      <p class="eyebrow">Powered by Typickle Events</p>
+      <h2>Live Tournaments</h2>
+      <p class="sub">Full live-scoring tournaments, kept separate from regular recreational sessions.</p>
+      <div class="chip-group">
         <button class="btn btn-outline btn-sm" data-action="go-livescore" style="border-color:var(--court); color:var(--court);">🏓 Live Scoring (Preview)</button>
+        <button class="btn btn-outline btn-sm" data-action="go-typickle-setup" style="border-color:var(--ball); color:var(--ink); background:rgba(215,230,57,0.2);">🏆 Typickle Tournament 1.0</button>
       </div>
     </div>
 
@@ -2853,6 +2989,94 @@ function renderRefereeGate(){
       <p class="sub">Enter the shared referee code to score matches. Ask the tournament organizer if you don't have it.</p>
       <div class="field"><label>Referee code</label><input type="password" id="referee-code-input" placeholder="Enter code"></div>
       <button class="btn btn-ink btn-wide" data-action="submit-referee-code">Enter</button>
+    </div>`;
+}
+function renderTypickleSetup(){
+  if(state.typickleCreated) return renderTypickleCreated();
+  const f = state.typickleSetup;
+  const paired = new Set(f.teams.flatMap(t=>t.players));
+  const unpaired = f.players.filter(p=>!paired.has(p.name));
+  const totalQualifiers = f.groupCount * f.qualifiersPerGroup;
+  const validBracketSizes = [1,2,4,8,16,32];
+  const bracketValid = validBracketSizes.includes(totalQualifiers);
+  const teamsNeeded = f.groupCount * 2; // at minimum, 2 teams per group for a round robin to make sense
+  const enoughTeams = f.teams.length >= Math.max(teamsNeeded, totalQualifiers);
+
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">Typickle Tournament</p>
+      <h2>Set up the event</h2>
+      <div class="field"><label>Event name</label><input type="text" id="typickle-name" value="${f.eventName}"></div>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Players</p>
+      <p class="sub" style="margin-top:0;">Add everyone playing. Names already in the shared player list will pull in their DUPR automatically.</p>
+      <div class="player-add-row">
+        <div class="field"><label>Player name</label><input type="text" id="typickle-player-name" list="playerNamesHome" placeholder="Player name"></div>
+        <div class="field dupr"><label>DUPR</label><input type="text" id="typickle-player-dupr" placeholder="3.5"></div>
+        <button class="btn btn-ink btn-sm" data-action="typickle-add-player" style="height:44px;">Add</button>
+      </div>
+      ${f.players.length ? `<div class="chip-group">${f.players.map((p,i)=>`<span class="chip active" data-action="typickle-remove-player" data-idx="${i}" style="cursor:pointer;">${p.name}${p.dupr?` (${p.dupr})`:""} &times;</span>`).join("")}</div>` : `<p class="help">No players added yet.</p>`}
+    </div>
+    ${f.players.length>=4 ? `
+    <div class="card">
+      <p class="eyebrow">Teams</p>
+      <p class="sub" style="margin-top:0;">Tap two players to pair them, or auto-pair everyone remaining.</p>
+      ${f.pairSelection ? `<p class="help" style="color:var(--court);">${f.pairSelection} selected &mdash; now tap their partner.</p>` : ""}
+      <div class="chip-group" style="margin-bottom:12px;">
+        ${unpaired.map(p=>`<div class="pair-chip ${f.pairSelection===p.name?"selected":""}" data-action="typickle-pick-pair" data-name="${p.name}">${p.name}</div>`).join("") || "<span class='help'>Everyone is paired.</span>"}
+      </div>
+      ${unpaired.length>=2 ? `
+      <div class="chip-group" style="margin-bottom:16px;">
+        <button class="btn btn-outline btn-sm" data-action="typickle-auto-pair" data-balanced="true">Auto-pair (balanced by DUPR)</button>
+        <button class="btn btn-outline btn-sm" data-action="typickle-auto-pair" data-balanced="false">Auto-pair (random)</button>
+      </div>` : ""}
+      ${f.teams.length ? `
+      <p class="eyebrow">Teams formed (${f.teams.length})</p>
+      ${f.teams.map((t,i)=>`
+        <div class="player-add-row">
+          <div class="field"><input type="text" id="typickle-team-name-${i}" value="${t.name}" onchange="typickleRenameTeam(${i})" style="font-weight:800;"></div>
+          <div class="field" style="flex:2;"><label style="text-transform:none; font-size:12.5px; font-weight:600; color:var(--muted);">${t.players[0]} & ${t.players[1]}</label></div>
+          <button class="remove-btn" data-action="typickle-remove-team" data-idx="${i}">Undo</button>
+        </div>`).join("")}` : ""}
+    </div>` : ""}
+    ${f.teams.length>=4 ? `
+    <div class="card">
+      <p class="eyebrow">Groups & Knockout</p>
+      <div class="row">
+        <div class="field"><label>Number of groups</label><select id="typickle-group-count">
+          ${[2,3,4,6,8].map(n=>`<option value="${n}" ${f.groupCount===n?"selected":""}>${n}</option>`).join("")}
+        </select></div>
+        <div class="field"><label>Qualifiers per group</label><select id="typickle-qualifiers">
+          ${[1,2,3].map(n=>`<option value="${n}" ${f.qualifiersPerGroup===n?"selected":""}>${n}</option>`).join("")}
+        </select></div>
+      </div>
+      <p class="help">${f.groupCount} groups &times; ${f.qualifiersPerGroup} qualifier${f.qualifiersPerGroup===1?"":"s"} = <b>${totalQualifiers}-team knockout bracket</b>${bracketValid?"":" \u2014 not a valid bracket size, adjust the numbers above"}</p>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:700; margin:12px 0;"><input type="checkbox" id="typickle-thirdplace" ${f.hasThirdPlacePlayoff?"checked":""} style="width:18px; height:18px; accent-color:var(--court);"> Include a 3rd place playoff</label>
+      ${!enoughTeams ? `<p class="help" style="color:var(--red, #b0413e);">Need at least ${Math.max(teamsNeeded,totalQualifiers)} teams for this group/qualifier setup &mdash; currently have ${f.teams.length}.</p>` : ""}
+      <button class="btn btn-ink btn-wide" data-action="typickle-create-event" ${(!bracketValid||!enoughTeams)?"disabled":""} style="margin-top:10px;">Generate Groups &amp; Create Event</button>
+    </div>` : ""}`;
+}
+function renderTypickleCreated(){
+  const ev = state.typickleCreated;
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back to Home</button>
+    <div class="card" style="background:var(--court); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Event created</p>
+      <h2 style="color:#fff;">${ev.name}</h2>
+      <p class="sub" style="color:#DCEDEA;">Event Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${ev.code}</b></p>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Groups (seeded by DUPR)</p>
+      ${ev.groups.map(g=>`
+        <p class="eyebrow" style="margin-top:14px;">${g.label}</p>
+        ${g.teamIds.map(tid=>{
+          const t = ev.teams.find(x=>x.id===tid);
+          return `<div class="history-row"><div class="loc">${t.name}</div><div class="help">${t.players.join(" & ")}${t.seedDupr?` &middot; ${t.seedDupr.toFixed(2)} avg DUPR`:""}</div></div>`;
+        }).join("")}
+      `).join("")}
+      <p class="help" style="margin-top:16px;">Round-robin scheduling within each group, match selection from the bracket, and locking groups to generate the knockout stage are all coming in the next build pass.</p>
     </div>`;
 }
 function renderLiveScoreSetup(){
@@ -3733,6 +3957,13 @@ function bindEvents(){
     else if(action==="go-sessions") await openSessionViewer();
     else if(action==="go-partnerships") openPartnerships();
     else if(action==="go-livescore") await openLiveScoring();
+    else if(action==="go-typickle-setup") { state.route="typickle-setup"; render(); }
+    else if(action==="typickle-add-player") typickleAddPlayer();
+    else if(action==="typickle-remove-player") typickleRemovePlayer(+el.dataset.idx);
+    else if(action==="typickle-pick-pair") handleTypicklePairPick(el.dataset.name);
+    else if(action==="typickle-auto-pair") typickleAutoPair(el.dataset.balanced==="true");
+    else if(action==="typickle-remove-team") typickleRemoveTeam(+el.dataset.idx);
+    else if(action==="typickle-create-event") await createTypickleEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
     else if(action==="ls-back-to-settings") { state.lsStep="settings"; render(); }
