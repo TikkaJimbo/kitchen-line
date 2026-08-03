@@ -361,6 +361,7 @@ const SL_LOCATIONS = [
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0/I/1
 const PLAYER_DB_KEY = "pickleball-lk-players";
 const PLAYER_LISTS_KEY = "kitchen-line-player-lists";
+const REFEREE_CODE_KEY = "typickle-referee-code";
 
 /* ============================= STATE ============================= */
 let state = {
@@ -406,7 +407,8 @@ let state = {
   lsStep: "settings",
   lsPlacements: { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null },
   lsSelectedChip: null,
-  lsMatch: null
+  lsMatch: null,
+  refereeAuthed: false
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -1153,6 +1155,18 @@ async function computeMatchPredictions(){
   showToast("Predictions ready");
 }
 /* ============================= LIVE SCORING ENGINE (tested standalone, see build notes) ============================= */
+async function submitRefereeCode(){
+  const input = document.getElementById("referee-code-input");
+  const entered = input.value.trim();
+  if(!entered){ showToast("Enter the referee code"); return; }
+  const raw = await storeGet(REFEREE_CODE_KEY, true);
+  if(!raw){ showToast("No referee code has been set up yet \u2014 ask the organizer to set one in Admin"); return; }
+  if(entered !== raw){ showToast("Incorrect code"); return; }
+  state.refereeAuthed = true;
+  try{ localStorage.setItem("typickle-referee-authed", "true"); }catch(e){}
+  showToast("Referee access granted");
+  render();
+}
 function lsGoToPositioning(){
   const a1 = document.getElementById("ls-a1").value.trim() || "Player A1";
   const a2 = document.getElementById("ls-a2").value.trim() || "Player A2";
@@ -2775,9 +2789,21 @@ function renderSessionViewer(){
   `;
 }
 function renderLiveScorePage(){
+  if(!state.refereeAuthed) return renderRefereeGate();
   if(state.lsMatch) return renderLiveScoreActive();
   if(state.lsStep==="position") return renderLiveScorePositioning();
   return renderLiveScoreSetup();
+}
+function renderRefereeGate(){
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">Live Scoring</p>
+      <h2>Referee access</h2>
+      <p class="sub">Enter the shared referee code to score matches. Ask the tournament organizer if you don't have it.</p>
+      <div class="field"><label>Referee code</label><input type="password" id="referee-code-input" placeholder="Enter code"></div>
+      <button class="btn btn-ink btn-wide" data-action="submit-referee-code">Enter</button>
+    </div>`;
 }
 function renderLiveScoreSetup(){
   const f = state.lsSetup;
@@ -3140,6 +3166,14 @@ function renderAdminDashboard(){
         <div class="field"><label>Player name</label><input type="text" id="admin-add-name" placeholder="e.g. New Player"></div>
         <div class="field dupr"><label>DUPR</label><input type="text" id="admin-add-dupr" placeholder="3.5"></div>
         <button class="btn btn-ink btn-sm" data-action="admin-add-player" style="height:44px;">Add</button>
+      </div>
+    </div>
+    <div class="card" style="border-color:var(--court);">
+      <p class="eyebrow">Typickle referee access code</p>
+      <p class="sub" style="margin-top:0;">A single shared code so any court's device can score matches, without needing individual referee logins. Anyone with this code can enter scores &mdash; keep it to people running a court.</p>
+      <div class="player-add-row">
+        <div class="field"><label>Code</label><input type="text" id="referee-code-admin-input" placeholder="e.g. TYPICKLE2026"></div>
+        <button class="btn btn-ink btn-sm" data-action="admin-save-referee-code" style="height:44px;">Save</button>
       </div>
     </div>
     <div class="card">
@@ -3649,6 +3683,7 @@ function bindEvents(){
     else if(action==="go-sessions") await openSessionViewer();
     else if(action==="go-partnerships") openPartnerships();
     else if(action==="go-livescore") { state.route="livescore"; render(); }
+    else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
     else if(action==="ls-back-to-settings") { state.lsStep="settings"; render(); }
     else if(action==="ls-select-chip") { state.lsSelectedChip = el.dataset.name; render(); }
@@ -3690,6 +3725,7 @@ function bindEvents(){
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
     else if(action==="run-prediction-report") await runPredictionReport();
     else if(action==="admin-add-player") await adminAddPlayer();
+    else if(action==="admin-save-referee-code") await adminSaveRefereeCode();
     else if(action==="add-to-list-builder") adminAddToListBuilder();
     else if(action==="remove-from-list-builder") adminRemoveFromListBuilder(+el.dataset.idx);
     else if(action==="save-player-list") await adminSaveList();
@@ -4109,6 +4145,14 @@ async function adminAddPlayer(){
   nameEl.value = ""; duprEl.value = "";
   showToast(`Added ${name}`);
   render();
+}
+async function adminSaveRefereeCode(){
+  const input = document.getElementById("referee-code-admin-input");
+  const code = input.value.trim();
+  if(!code){ showToast("Enter a code"); return; }
+  await storeSet(REFEREE_CODE_KEY, code, true);
+  showToast("Referee code saved");
+  input.value = "";
 }
 function adminAddToListBuilder(){
   const nameEl = document.getElementById("list-player-name");
@@ -4573,6 +4617,7 @@ function startPolling(){
 async function init(){
   state.playerDb = await loadPlayerDb();
   await checkAdminSession();
+  try{ if(localStorage.getItem("typickle-referee-authed")==="true") state.refereeAuthed = true; }catch(e){}
   const hash = location.hash;
   if(hash.startsWith("#code=")){
     const code = hash.replace("#code=","").toUpperCase();
