@@ -418,6 +418,7 @@ let state = {
   typickleEventCode: null,
   typickleEvent: null,
   typickleLoading: false,
+  typickleCourtNum: null,
   lsTypickleRef: null
 };
 
@@ -468,7 +469,7 @@ function generateGroupMatches(teams){
   const raw = generateRoundRobin(participants);
   return raw.filter(m=>!m.isBye).map(m=>({
     id:m.id, round:m.round, a:m.a, b:m.b,
-    matchCode:null, status:"scheduled",
+    matchCode:null, status:"scheduled", court:null,
     gamesWonA:null, gamesWonB:null, winner:null,
     pointsForA:null, pointsForB:null
   }));
@@ -1284,7 +1285,7 @@ function makeTypickleBracket(pairs, teams){
     const a = teams.find(t=>t.id===pair[0]) ? {id:pair[0], label:teams.find(t=>t.id===pair[0]).name} : {id:"BYE-"+i+"a", label:"Bye", bye:true};
     const b = teams.find(t=>t.id===pair[1]) ? {id:pair[1], label:teams.find(t=>t.id===pair[1]).name} : {id:"BYE-"+i+"b", label:"Bye", bye:true};
     return {
-      id:"tko-1-"+i, round:1, a, b, matchCode:null, status:(a.bye||b.bye)?"complete":"scheduled",
+      id:"tko-1-"+i, round:1, a, b, matchCode:null, status:(a.bye||b.bye)?"complete":"scheduled", court:null,
       gamesWonA:null, gamesWonB:null, winner: a.bye?b.id:(b.bye?a.id:null), isBye:!!(a.bye||b.bye),
       pointsForA:null, pointsForB:null
     };
@@ -1294,7 +1295,7 @@ function makeTypickleBracket(pairs, teams){
   while(count>1){
     count/=2;
     const rm = [];
-    for(let i=0;i<count;i++) rm.push({id:"tko-"+r+"-"+i, round:r, a:null, b:null, matchCode:null, status:"pending", gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null});
+    for(let i=0;i<count;i++) rm.push({id:"tko-"+r+"-"+i, round:r, a:null, b:null, matchCode:null, status:"pending", court:null, gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null});
     rounds.push(rm); r++;
   }
   propagateBracket(rounds);
@@ -1339,7 +1340,14 @@ async function confirmAndLockGroups(){
   haptic("medium");
   render();
 }
-function typickleScoreMatch(matchId){
+function typickleSetCourt(){
+  const input = document.getElementById("typickle-court-input");
+  const num = parseInt(input.value.trim(), 10);
+  if(!num || num<1){ showToast("Enter a valid court number"); return; }
+  state.typickleCourtNum = num;
+  render();
+}
+function typickleScoreMatch(matchId, courtNum){
   const ev = state.typickleEvent;
   const found = typickleFindMatch(ev, matchId);
   if(!found){ showToast("Match not found"); return; }
@@ -1352,7 +1360,7 @@ function typickleScoreMatch(matchId){
     winTarget: 11, winBy: 2, bestOf: isKnockout ? 3 : 1,
     servingTeam: "a", orientation: "left"
   };
-  state.lsTypickleRef = { eventCode: ev.code, matchId, teamAId: teamA.id, teamBId: teamB.id };
+  state.lsTypickleRef = { eventCode: ev.code, matchId, teamAId: teamA.id, teamBId: teamB.id, court: courtNum || match.court || null };
   state.lsStep = "settings";
   state.lsMatch = null;
   state.lsPlacements = {topLeft:null,bottomLeft:null,topRight:null,bottomRight:null};
@@ -1399,7 +1407,7 @@ async function syncTypickleResult(){
           const loserOf = m => m.winner===m.a.id ? m.b : m.a;
           const l1 = loserOf(semis[0]), l2 = loserOf(semis[1]);
           if(!l1.bye && !l2.bye){
-            ev.thirdPlaceMatch = { id:"tko-3rd", round:0, a:l1, b:l2, matchCode:null, status:"scheduled", gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null };
+            ev.thirdPlaceMatch = { id:"tko-3rd", round:0, a:l1, b:l2, matchCode:null, status:"scheduled", court:null, gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null };
           }
         }
       }
@@ -1416,15 +1424,17 @@ async function syncTypickleResult(){
 }
 async function typickleBackToEvent(){
   const eventCode = state.lsTypickleRef ? state.lsTypickleRef.eventCode : (state.typickleEvent && state.typickleEvent.code);
+  const cameFromCourt = state.lsTypickleRef ? state.lsTypickleRef.court : null;
   state.lsMatch = null; state.lsMatchCode = null; state.lsTypickleRef = null;
   try{ localStorage.removeItem("typickle-current-match"); }catch(e){}
   state.lsStep = "settings";
   state.lsPlacements = {topLeft:null,bottomLeft:null,topRight:null,bottomRight:null};
   state.lsSelectedChip = null;
   if(eventCode){
-    state.typickleLoading = true; state.route = "typickle-event"; render();
+    state.typickleLoading = true; state.route = cameFromCourt ? "typickle-court" : "typickle-event"; render();
     state.typickleEvent = await loadTypickleEvent(eventCode);
     state.typickleEventCode = eventCode;
+    if(cameFromCourt) state.typickleCourtNum = cameFromCourt;
     state.typickleLoading = false;
   } else {
     state.route = "home";
@@ -1639,7 +1649,7 @@ async function lsConfirmStart(){
       if(ev){
         const group = ev.groups.find(g=>g.id===state.lsTypickleRef.groupId);
         const gm = group && group.matches.find(m=>m.id===state.lsTypickleRef.matchId);
-        if(gm){ gm.status="live"; gm.matchCode=state.lsMatchCode; await saveTypickleEvent(ev.code, ev); if(state.typickleEvent && state.typickleEvent.code===ev.code) state.typickleEvent = ev; }
+        if(gm){ gm.status="live"; gm.matchCode=state.lsMatchCode; if(state.lsTypickleRef.court) gm.court=state.lsTypickleRef.court; await saveTypickleEvent(ev.code, ev); if(state.typickleEvent && state.typickleEvent.code===ev.code) state.typickleEvent = ev; }
       }
     }catch(e){}
   }
@@ -2521,6 +2531,7 @@ function render(){
   else if(state.route==="livescore") view.innerHTML = renderLiveScorePage();
   else if(state.route==="typickle-setup") view.innerHTML = renderTypickleSetup();
   else if(state.route==="typickle-event") view.innerHTML = renderTypickleEvent();
+  else if(state.route==="typickle-court") view.innerHTML = renderTypickleCourtQueue();
   bindEvents();
 }
 
@@ -3315,6 +3326,7 @@ function renderTypickleEvent(){
       <p class="eyebrow" style="color:var(--ball);">Live Tournament</p>
       <h2 style="color:#fff;">${ev.name}</h2>
       <p class="sub" style="color:#DCEDEA;">Event Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${ev.code}</b></p>
+      <button class="btn btn-outline btn-sm" data-action="go-typickle-court" style="border-color:#fff; color:#fff; margin-top:8px;">View by Court</button>
     </div>
     ${ev.groups.map(g=>{
       const standings = computeGroupStandings(g, ev.teams);
@@ -3350,6 +3362,59 @@ function renderTypickleEvent(){
         <p class="eyebrow" style="color:var(--ball);">Champion</p>
         <h2 style="color:#fff;">${teamName(ev.bracket[ev.bracket.length-1][0].winner)}</h2>
       </div>` : ""}`;
+}
+function renderTypickleCourtQueue(){
+  const ev = state.typickleEvent;
+  if(!ev) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>No event loaded</h2></div>`;
+  if(!state.typickleCourtNum){
+    return `
+      <button class="back-link" data-action="typickle-back-to-event">&larr; Back to Event</button>
+      <div class="card">
+        <p class="eyebrow">${ev.name}</p>
+        <h2>Which court are you running?</h2>
+        <p class="sub">See what's live and what's up next on this specific court, without hunting through the whole bracket.</p>
+        <div class="join-row">
+          <input type="text" id="typickle-court-input" inputmode="numeric" placeholder="e.g. 1">
+          <button class="btn btn-ink" data-action="typickle-set-court">View Queue</button>
+        </div>
+      </div>`;
+  }
+  const courtNum = state.typickleCourtNum;
+  const teamName = id => (ev.teams.find(t=>t.id===id)||{}).name || "?";
+  const allMatches = [
+    ...ev.groups.flatMap(g=>g.matches),
+    ...(ev.bracket ? ev.bracket.flat() : []),
+    ...(ev.thirdPlaceMatch ? [ev.thirdPlaceMatch] : [])
+  ];
+  const playable = m => m.a && m.b && !m.a.bye && !m.b.bye;
+  const live = allMatches.find(m=>m.court===courtNum && m.status==="live");
+  const queued = allMatches.filter(m=> playable(m) && m.status==="scheduled" && (m.court===courtNum || m.court==null));
+  return `
+    <button class="back-link" data-action="typickle-change-court">&larr; Change court</button>
+    <div class="card" style="background:var(--court); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">${ev.name}</p>
+      <h2 style="color:#fff;">Court ${courtNum}</h2>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Currently live</p>
+      ${live ? `
+        <div class="match-card">
+          <div class="side">${teamName(live.a.id)}</div>
+          <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">LIVE</div>
+          <div class="side" style="text-align:right;">${teamName(live.b.id)}</div>
+          <button class="btn btn-outline btn-sm" data-action="typickle-resume-match" data-code="${live.matchCode}">Resume</button>
+        </div>` : `<p class="help">Nothing live on this court right now.</p>`}
+    </div>
+    <div class="card">
+      <p class="eyebrow">Up next (${queued.length})</p>
+      ${queued.length ? queued.slice(0,5).map(m=>`
+        <div class="match-card">
+          <div class="side">${teamName(m.a.id)}</div>
+          <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">&mdash;</div>
+          <div class="side" style="text-align:right;">${teamName(m.b.id)}</div>
+          <button class="btn btn-ink btn-sm" data-action="typickle-claim-match" data-match="${m.id}" data-court="${courtNum}">Score this match</button>
+        </div>`).join("") : `<p class="help">No matches waiting for this court yet.</p>`}
+    </div>`;
 }
 function renderLiveScoreSetup(){
   const f = state.lsSetup;
@@ -4244,6 +4309,10 @@ function bindEvents(){
     else if(action==="typickle-score-match") typickleScoreMatch(el.dataset.match);
     else if(action==="typickle-resume-match") await typickleResumeMatch(el.dataset.code);
     else if(action==="typickle-confirm-lock") await confirmAndLockGroups();
+    else if(action==="go-typickle-court") { state.route="typickle-court"; render(); }
+    else if(action==="typickle-set-court") typickleSetCourt();
+    else if(action==="typickle-change-court") { state.typickleCourtNum=null; render(); }
+    else if(action==="typickle-claim-match") typickleScoreMatch(el.dataset.match, +el.dataset.court);
     else if(action==="typickle-back-to-event") await typickleBackToEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
