@@ -196,7 +196,7 @@
   .ls-quad.serving{background:rgba(215,230,57,0.3);}
   .ls-quad.filled{background:rgba(14,92,85,0.06);}
   .ls-quad.targetable{background:rgba(215,230,57,0.18); cursor:pointer;}
-  .ls-quad-team{font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); font-weight:800; opacity:0.7;}
+  .ls-quad-team{font-size:12.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--court); font-weight:800; opacity:1;}
   .ls-quad-court{font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--court); font-weight:700;}
   .ls-quad-occupant{font-weight:800; font-size:15px; margin-top:2px;}
   .ls-net{width:5px; background:repeating-linear-gradient(180deg, var(--ink) 0 8px, transparent 8px 14px); flex:0 0 auto;}
@@ -1191,6 +1191,17 @@ function lsSwapServingPair(){
   haptic("light");
   render();
 }
+function lsSwapReceivingPair(){
+  const layout = lsComputeLayout(state.lsSetup);
+  const receivingTeam = state.lsSetup.servingTeam==="a" ? "b" : "a";
+  const rightKey = Object.keys(layout.quadrants).find(k=>layout.quadrants[k].team===receivingTeam && layout.quadrants[k].courtSide==="right");
+  const leftKey = Object.keys(layout.quadrants).find(k=>layout.quadrants[k].team===receivingTeam && layout.quadrants[k].courtSide==="left");
+  const tmp = state.lsPlacements[rightKey];
+  state.lsPlacements[rightKey] = state.lsPlacements[leftKey];
+  state.lsPlacements[leftKey] = tmp;
+  haptic("light");
+  render();
+}
 function lsConfirmStart(){
   const layout = lsComputeLayout(state.lsSetup);
   const initialPositions = { a:{}, b:{} };
@@ -1259,7 +1270,6 @@ function lsApplyRally(state, rallyWinnerTeam){
     if(servingTeam==='a') next.scoreA++; else next.scoreB++;
     const p = next.positions[servingTeam];
     next.positions[servingTeam] = { right: p.left, left: p.right };
-    next.isFirstServe = false;
   } else {
     if(next.isFirstServe){
       lsSideOut(next);
@@ -2803,6 +2813,7 @@ function renderLiveScoreServerConfirm(layout){
       <p class="sub" style="color:#DCEDEA;">Right-court player on the serving side always serves first. If that's wrong, swap them below.</p>
       <div class="chip-group" style="margin-bottom:16px;">
         <button class="btn btn-outline btn-sm" data-action="ls-swap-servers" style="border-color:#fff; color:#fff;">Swap serving pair</button>
+        <button class="btn btn-outline btn-sm" data-action="ls-swap-receivers" style="border-color:#fff; color:#fff;">Swap receiving pair</button>
       </div>
       <button class="btn btn-ink btn-wide" data-action="ls-confirm-start" style="background:var(--ball); color:var(--ink); border-color:var(--ink);">Start match</button>
     </div>`;
@@ -2846,8 +2857,8 @@ function renderLiveScoreActive(){
           <button class="btn btn-outline btn-wide" data-action="ls-back-to-setup">New setup</button>
         </div>` : `
         <div class="ls-buttons">
-          <button class="ls-point-btn" data-action="ls-point" data-team="a">Rally Winner<br><b>Team A</b></button>
-          <button class="ls-point-btn" data-action="ls-point" data-team="b">Rally Winner<br><b>Team B</b></button>
+          <button class="ls-point-btn" data-action="ls-point" data-team="${layout.leftTeam}">Rally Winner<br><b>Team ${layout.leftTeam==="a"?"A":"B"}</b></button>
+          <button class="ls-point-btn" data-action="ls-point" data-team="${layout.rightTeam}">Rally Winner<br><b>Team ${layout.rightTeam==="a"?"A":"B"}</b></button>
         </div>
         <button class="btn btn-outline btn-wide" data-action="ls-undo" ${g.rallyLog.length===0?"disabled":""}>Undo last rally</button>
       `}
@@ -3548,6 +3559,7 @@ function bindEvents(){
     else if(action==="ls-place") lsPlacePlayer(el.dataset.key);
     else if(action==="ls-unplace") lsUnplacePlayer(el.dataset.name);
     else if(action==="ls-swap-servers") lsSwapServingPair();
+    else if(action==="ls-swap-receivers") lsSwapReceivingPair();
     else if(action==="ls-confirm-start") lsConfirmStart();
     else if(action==="ls-point") { state.lsGame = lsApplyRally(state.lsGame, el.dataset.team); haptic("light"); render(); }
     else if(action==="ls-undo") { state.lsGame = lsUndoLastRally(state.lsGame); haptic("medium"); render(); }
