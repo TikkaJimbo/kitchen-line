@@ -415,7 +415,10 @@ let state = {
     players: [], teams: [], pairSelection: null,
     groupCount: 4, qualifiersPerGroup: 1, hasThirdPlacePlayoff: true
   },
-  typickleCreated: null
+  typickleEventCode: null,
+  typickleEvent: null,
+  typickleLoading: false,
+  lsTypickleRef: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -460,6 +463,43 @@ async function loadTypickleEvent(code){
   if(!raw) return null;
   try{ return JSON.parse(raw); }catch(e){ return null; }
 }
+function generateGroupMatches(teams){
+  const participants = teams.map(t=>({id:t.id, label:t.name}));
+  const raw = generateRoundRobin(participants);
+  return raw.filter(m=>!m.isBye).map(m=>({
+    id:m.id, round:m.round, a:m.a, b:m.b,
+    matchCode:null, status:"scheduled",
+    gamesWonA:null, gamesWonB:null, winner:null,
+    pointsForA:null, pointsForB:null
+  }));
+}
+function computeGroupStandings(group, teams){
+  const table = {};
+  group.teamIds.forEach(tid=>{
+    const t = teams.find(x=>x.id===tid);
+    table[tid] = { id:tid, name:t.name, played:0, won:0, lost:0, pf:0, pa:0 };
+  });
+  group.matches.forEach(m=>{
+    if(m.status!=="complete") return;
+    const rowA = table[m.a.id], rowB = table[m.b.id];
+    if(!rowA || !rowB) return;
+    rowA.played++; rowB.played++;
+    rowA.pf += m.pointsForA; rowA.pa += m.pointsForB;
+    rowB.pf += m.pointsForB; rowB.pa += m.pointsForA;
+    if(m.winner===m.a.id){ rowA.won++; rowB.lost++; } else { rowB.won++; rowA.lost++; }
+  });
+  const rows = Object.values(table);
+  rows.sort((x,y)=>{
+    if(y.won!==x.won) return y.won-x.won;
+    const diffX = x.pf-x.pa, diffY = y.pf-y.pa;
+    if(diffY!==diffX) return diffY-diffX;
+    // tiebreak: head-to-head between exactly these two teams
+    const h2h = group.matches.find(m=>m.status==="complete" && ((m.a.id===x.id&&m.b.id===y.id)||(m.a.id===y.id&&m.b.id===x.id)));
+    if(h2h) return h2h.winner===x.id ? -1 : 1;
+    return 0;
+  });
+  return rows;
+}
 function makeTypickleGroups(teams, groupCount){
   let sorted = teams.slice().sort((a,b)=>(b.seedDupr||0)-(a.seedDupr||0));
   const groups = Array.from({length:groupCount}, ()=>[]);
@@ -472,7 +512,7 @@ function makeTypickleGroups(teams, groupCount){
   return groups.map((gTeams,i)=>({
     id:"G"+(i+1), label:"Group "+String.fromCharCode(65+i),
     teamIds: gTeams.map(t=>t.id),
-    matches: []
+    matches: generateGroupMatches(gTeams)
   }));
 }
 async function codeTaken(code){
@@ -1217,6 +1257,78 @@ async function computeMatchPredictions(){
   showToast("Predictions ready");
 }
 /* ============================= LIVE SCORING ENGINE (tested standalone, see build notes) ============================= */
+function typickleScoreMatch(groupId, matchId){
+  const ev = state.typickleEvent;
+  const group = ev.groups.find(g=>g.id===groupId);
+  const match = group.matches.find(m=>m.id===matchId);
+  const teamA = ev.teams.find(t=>t.id===match.a.id);
+  const teamB = ev.teams.find(t=>t.id===match.b.id);
+  state.lsSetup = {
+    teamAPlayers: teamA.players.slice(), teamBPlayers: teamB.players.slice(),
+    winTarget: 11, winBy: 2, bestOf: 1,
+    servingTeam: "a", orientation: "left"
+  };
+  state.lsTypickleRef = { eventCode: ev.code, groupId, matchId, teamAId: teamA.id, teamBId: teamB.id };
+  state.lsStep = "settings";
+  state.lsMatch = null;
+  state.lsPlacements = {topLeft:null,bottomLeft:null,topRight:null,bottomRight:null};
+  state.lsSelectedChip = null;
+  state.route = "livescore";
+  render();
+}
+async function typickleResumeMatch(matchCode, groupId, matchId){
+  const saved = await loadLiveMatch(matchCode);
+  if(!saved){ showToast("Couldn't find that match"); return; }
+  state.lsMatch = saved;
+  state.lsMatchCode = matchCode;
+  state.lsTypickleRef = saved.typickleRef || null;
+  try{ localStorage.setItem("typickle-current-match", matchCode); }catch(e){}
+  state.route = "livescore";
+  render();
+  syncTypickleResult();
+}
+async function syncTypickleResult(){
+  const match = state.lsMatch;
+  if(!match || !match.matchOver || !match.typickleRef || match.typickleResultSynced) return;
+  const ref = match.typickleRef;
+  try{
+    const ev = await loadTypickleEvent(ref.eventCode);
+    if(!ev) return;
+    const group = ev.groups.find(g=>g.id===ref.groupId);
+    const gm = group && group.matches.find(m=>m.id===ref.matchId);
+    if(!gm) return;
+    let pointsForA=0, pointsForB=0;
+    match.games.forEach(g=>{ pointsForA += g.scoreA; pointsForB += g.scoreB; });
+    gm.status = "complete";
+    gm.gamesWonA = match.gamesWonA; gm.gamesWonB = match.gamesWonB;
+    gm.winner = match.matchWinner==="a" ? ref.teamAId : ref.teamBId;
+    gm.pointsForA = pointsForA; gm.pointsForB = pointsForB;
+    gm.matchCode = state.lsMatchCode;
+    await saveTypickleEvent(ref.eventCode, ev);
+    match.typickleResultSynced = true;
+    if(state.typickleEvent && state.typickleEvent.code===ref.eventCode) state.typickleEvent = ev;
+    persistMatch();
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't sync the result to the tournament \u2014 will retry");
+  }
+}
+async function typickleBackToEvent(){
+  const eventCode = state.lsTypickleRef ? state.lsTypickleRef.eventCode : (state.typickleEvent && state.typickleEvent.code);
+  state.lsMatch = null; state.lsMatchCode = null; state.lsTypickleRef = null;
+  try{ localStorage.removeItem("typickle-current-match"); }catch(e){}
+  state.lsStep = "settings";
+  state.lsPlacements = {topLeft:null,bottomLeft:null,topRight:null,bottomRight:null};
+  state.lsSelectedChip = null;
+  if(eventCode){
+    state.typickleLoading = true; state.route = "typickle-event"; render();
+    state.typickleEvent = await loadTypickleEvent(eventCode);
+    state.typickleEventCode = eventCode;
+    state.typickleLoading = false;
+  } else {
+    state.route = "home";
+  }
+  render();
+}
 function typickleAddPlayer(){
   const nameEl = document.getElementById("typickle-player-name");
   const duprEl = document.getElementById("typickle-player-dupr");
@@ -1301,7 +1413,9 @@ async function createTypickleEvent(){
     showToast("\u26a0\ufe0f Couldn't save the event \u2014 check your connection and try again");
     return;
   }
-  state.typickleCreated = event;
+  state.typickleEvent = event;
+  state.typickleEventCode = code;
+  state.route = "typickle-event";
   haptic("medium");
   render();
 }
@@ -1344,7 +1458,9 @@ async function openLiveScoring(){
       if(saved){
         state.lsMatch = saved;
         state.lsMatchCode = savedCode;
+        state.lsTypickleRef = saved.typickleRef || null;
         showToast("Resumed your in-progress match");
+        syncTypickleResult();
       } else {
         try{ localStorage.removeItem("typickle-current-match"); }catch(e){}
       }
@@ -1406,6 +1522,7 @@ async function lsConfirmStart(){
   const firstServer = state.lsPlacements[servingQuadKey];
   const setup = Object.assign({}, state.lsSetup, { firstServer, initialPositions });
   state.lsMatch = lsCreateMatch(setup);
+  if(state.lsTypickleRef){ state.lsMatch.typickleRef = state.lsTypickleRef; state.lsMatch.typickleResultSynced = false; }
   state.lsMatchCode = await generateUniqueMatchCode();
   try{ localStorage.setItem("typickle-current-match", state.lsMatchCode); }catch(e){}
   try{
@@ -1413,6 +1530,16 @@ async function lsConfirmStart(){
   }catch(e){
     showToast("\u26a0\ufe0f Couldn't save the match \u2014 check your connection and try again");
     return;
+  }
+  if(state.lsTypickleRef){
+    try{
+      const ev = await loadTypickleEvent(state.lsTypickleRef.eventCode);
+      if(ev){
+        const group = ev.groups.find(g=>g.id===state.lsTypickleRef.groupId);
+        const gm = group && group.matches.find(m=>m.id===state.lsTypickleRef.matchId);
+        if(gm){ gm.status="live"; gm.matchCode=state.lsMatchCode; await saveTypickleEvent(ev.code, ev); if(state.typickleEvent && state.typickleEvent.code===ev.code) state.typickleEvent = ev; }
+      }
+    }catch(e){}
   }
   haptic("medium");
   render();
@@ -2291,6 +2418,7 @@ function render(){
   else if(state.route==="partnerships") view.innerHTML = renderPartnershipsPage();
   else if(state.route==="livescore") view.innerHTML = renderLiveScorePage();
   else if(state.route==="typickle-setup") view.innerHTML = renderTypickleSetup();
+  else if(state.route==="typickle-event") view.innerHTML = renderTypickleEvent();
   bindEvents();
 }
 
@@ -2992,7 +3120,6 @@ function renderRefereeGate(){
     </div>`;
 }
 function renderTypickleSetup(){
-  if(state.typickleCreated) return renderTypickleCreated();
   const f = state.typickleSetup;
   const paired = new Set(f.teams.flatMap(t=>t.players));
   const unpaired = f.players.filter(p=>!paired.has(p.name));
@@ -3058,26 +3185,38 @@ function renderTypickleSetup(){
       <button class="btn btn-ink btn-wide" data-action="typickle-create-event" ${(!bracketValid||!enoughTeams)?"disabled":""} style="margin-top:10px;">Generate Groups &amp; Create Event</button>
     </div>` : ""}`;
 }
-function renderTypickleCreated(){
-  const ev = state.typickleCreated;
+function renderTypickleEvent(){
+  if(state.typickleLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading event\u2026</div>`;
+  const ev = state.typickleEvent;
+  if(!ev) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Event not found</h2></div>`;
+  const teamName = id => (ev.teams.find(t=>t.id===id)||{}).name || "?";
   return `
     <button class="back-link" data-action="go-home">&larr; Back to Home</button>
     <div class="card" style="background:var(--court); border-color:var(--ink);">
-      <p class="eyebrow" style="color:var(--ball);">Event created</p>
+      <p class="eyebrow" style="color:var(--ball);">Live Tournament</p>
       <h2 style="color:#fff;">${ev.name}</h2>
       <p class="sub" style="color:#DCEDEA;">Event Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${ev.code}</b></p>
     </div>
-    <div class="card">
-      <p class="eyebrow">Groups (seeded by DUPR)</p>
-      ${ev.groups.map(g=>`
-        <p class="eyebrow" style="margin-top:14px;">${g.label}</p>
-        ${g.teamIds.map(tid=>{
-          const t = ev.teams.find(x=>x.id===tid);
-          return `<div class="history-row"><div class="loc">${t.name}</div><div class="help">${t.players.join(" & ")}${t.seedDupr?` &middot; ${t.seedDupr.toFixed(2)} avg DUPR`:""}</div></div>`;
-        }).join("")}
-      `).join("")}
-      <p class="help" style="margin-top:16px;">Round-robin scheduling within each group, match selection from the bracket, and locking groups to generate the knockout stage are all coming in the next build pass.</p>
-    </div>`;
+    ${ev.groups.map(g=>{
+      const standings = computeGroupStandings(g, ev.teams);
+      return `
+      <div class="card">
+        <p class="eyebrow">${g.label}</p>
+        <div class="table-scroll"><table>
+          <tr><th>#</th><th>Team</th><th>P</th><th>W-L</th><th>+/-</th></tr>
+          ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.pf-r.pa>0?"+":""}${r.played?r.pf-r.pa:"&mdash;"}</td></tr>`).join("")}
+        </table></div>
+        <p class="eyebrow" style="margin-top:16px;">Matches</p>
+        ${g.matches.map(m=>`
+          <div class="match-card">
+            <div class="side ${m.status==="complete"&&m.winner===m.a.id?"win":""}">${teamName(m.a.id)}</div>
+            <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? `${m.gamesWonA}-${m.gamesWonB}` : m.status==="live" ? "LIVE" : "&mdash;"}</div>
+            <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${teamName(m.b.id)}</div>
+            ${m.status==="scheduled" ? `<button class="btn btn-ink btn-sm" data-action="typickle-score-match" data-group="${g.id}" data-match="${m.id}">Score this match</button>` : ""}
+            ${m.status==="live" ? `<button class="btn btn-outline btn-sm" data-action="typickle-resume-match" data-code="${m.matchCode}" data-group="${g.id}" data-match="${m.id}">Resume</button>` : ""}
+          </div>`).join("")}
+      </div>`;
+    }).join("")}`;
 }
 function renderLiveScoreSetup(){
   const f = state.lsSetup;
@@ -3217,8 +3356,13 @@ function renderLiveScoreActive(){
         <div class="ls-gameover">
           <h2>Match over &mdash; Team ${match.matchWinner==="a"?"A":"B"} wins ${lsMatchScoreSummary(match)}</h2>
           <p class="help">${match.games.map((mg,i)=>`Game ${i+1}: ${Math.max(mg.scoreA,mg.scoreB)}-${Math.min(mg.scoreA,mg.scoreB)} (Team ${mg.winner==="a"?"A":"B"})`).join(" &middot; ")}</p>
-          <button class="btn btn-ink btn-wide" data-action="ls-rematch" style="margin:14px 0 10px;">Rematch (same players)</button>
-          <button class="btn btn-outline btn-wide" data-action="ls-back-to-setup">New setup</button>
+          ${match.typickleRef ? `
+            <p class="help" style="color:var(--court);">${match.typickleResultSynced ? "\u2713 Result saved to the tournament" : "Saving result to the tournament\u2026"}</p>
+            <button class="btn btn-ink btn-wide" data-action="typickle-back-to-event" style="margin:14px 0 10px;">Back to Tournament</button>
+          ` : `
+            <button class="btn btn-ink btn-wide" data-action="ls-rematch" style="margin:14px 0 10px;">Rematch (same players)</button>
+            <button class="btn btn-outline btn-wide" data-action="ls-back-to-setup">New setup</button>
+          `}
         </div>
       </div>`;
   }
@@ -3964,6 +4108,9 @@ function bindEvents(){
     else if(action==="typickle-auto-pair") typickleAutoPair(el.dataset.balanced==="true");
     else if(action==="typickle-remove-team") typickleRemoveTeam(+el.dataset.idx);
     else if(action==="typickle-create-event") await createTypickleEvent();
+    else if(action==="typickle-score-match") typickleScoreMatch(el.dataset.group, el.dataset.match);
+    else if(action==="typickle-resume-match") await typickleResumeMatch(el.dataset.code, el.dataset.group, el.dataset.match);
+    else if(action==="typickle-back-to-event") await typickleBackToEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
     else if(action==="ls-back-to-settings") { state.lsStep="settings"; render(); }
@@ -3973,7 +4120,7 @@ function bindEvents(){
     else if(action==="ls-swap-servers") lsSwapServingPair();
     else if(action==="ls-swap-receivers") lsSwapReceivingPair();
     else if(action==="ls-confirm-start") await lsConfirmStart();
-    else if(action==="ls-point") { state.lsMatch = lsApplyMatchRally(state.lsMatch, el.dataset.team); haptic("light"); render(); persistMatch(); }
+    else if(action==="ls-point") { state.lsMatch = lsApplyMatchRally(state.lsMatch, el.dataset.team); haptic("light"); render(); persistMatch(); syncTypickleResult(); }
     else if(action==="ls-undo") { state.lsMatch = lsUndoMatchRally(state.lsMatch); haptic("medium"); render(); persistMatch(); }
     else if(action==="ls-switch-sides") { const m=state.lsMatch; const idx=m.games.length-1; m.games[idx] = lsSwitchSides(m.games[idx]); haptic("medium"); render(); persistMatch(); }
     else if(action==="ls-start-next-game") { state.lsMatch = lsStartNextGame(state.lsMatch); haptic("medium"); render(); persistMatch(); }
