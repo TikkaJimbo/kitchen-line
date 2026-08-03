@@ -1234,9 +1234,17 @@ function lsCreateInitialGameState(setup){
   }
   return {
     setup, scoreA:0, scoreB:0, servingTeam, serverNum:1, isFirstServe:true,
-    currentServer: firstServer, positions, winTarget, winBy, rallyLog:[], gameOver:false, winner:null
+    currentServer: firstServer, positions, winTarget, winBy, rallyLog:[], gameOver:false, winner:null,
+    orientation: setup.orientation, sidesSwitched: false
   };
 }
+function lsSwitchSides(state){
+  return Object.assign({}, state, {
+    orientation: state.orientation==="left" ? "right" : "left",
+    sidesSwitched: true
+  });
+}
+function lsSwitchThreshold(winTarget){ return Math.ceil(winTarget/2); }
 function lsSideOut(state){
   state.servingTeam = state.servingTeam==='a' ? 'b' : 'a';
   state.serverNum = 1;
@@ -1274,6 +1282,8 @@ function lsUndoLastRally(state){
   const remaining = state.rallyLog.slice(0,-1);
   let fresh = lsCreateInitialGameState(state.setup);
   remaining.forEach(entry=>{ fresh = lsApplyRally(fresh, entry.rallyWinner); });
+  fresh.orientation = state.orientation;
+  fresh.sidesSwitched = state.sidesSwitched;
   return fresh;
 }
 function lsScoreLabel(state){
@@ -2799,7 +2809,7 @@ function renderLiveScoreServerConfirm(layout){
 }
 function renderLiveScoreActive(){
   const g = state.lsGame;
-  const layout = lsComputeLayout(g.setup);
+  const layout = lsComputeLayout({servingTeam: g.setup.servingTeam, orientation: g.orientation});
   const servingLabel = g.servingTeam==="a" ? "Team A" : "Team B";
 
   const quadHtml = (key) => {
@@ -2826,6 +2836,9 @@ function renderLiveScoreActive(){
         <div class="ls-net"></div>
         <div class="ls-position-col">${quadHtml("topRight")}${quadHtml("bottomRight")}</div>
       </div>
+      ${(!g.gameOver && !g.sidesSwitched && Math.max(g.scoreA,g.scoreB)>=lsSwitchThreshold(g.winTarget)) ? `
+        <button class="btn btn-outline btn-wide" data-action="ls-switch-sides" style="margin-bottom:14px; border-color:var(--court); color:var(--court);">Switch sides</button>
+      ` : ""}
       ${g.gameOver ? `
         <div class="ls-gameover">
           <h2>Game over &mdash; Team ${g.winner==="a"?"A":"B"} wins ${Math.max(g.scoreA,g.scoreB)}-${Math.min(g.scoreA,g.scoreB)}</h2>
@@ -3538,6 +3551,7 @@ function bindEvents(){
     else if(action==="ls-confirm-start") lsConfirmStart();
     else if(action==="ls-point") { state.lsGame = lsApplyRally(state.lsGame, el.dataset.team); haptic("light"); render(); }
     else if(action==="ls-undo") { state.lsGame = lsUndoLastRally(state.lsGame); haptic("medium"); render(); }
+    else if(action==="ls-switch-sides") { state.lsGame = lsSwitchSides(state.lsGame); haptic("medium"); render(); }
     else if(action==="ls-rematch") { state.lsGame = lsCreateInitialGameState(state.lsGame.setup); haptic("medium"); render(); }
     else if(action==="ls-back-to-setup") { state.lsGame = null; state.lsStep="settings"; state.lsPlacements={topLeft:null,bottomLeft:null,topRight:null,bottomRight:null}; state.lsSelectedChip=null; render(); }
     else if(action==="compute-partnerships") await computePartnerships();
