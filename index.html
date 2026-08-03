@@ -402,11 +402,11 @@ let state = {
   matchupDifficultyIsForecast: false,
   playerLists: [],
   listBuilder: { name: "", players: [] },
-  lsSetup: { teamAPlayers:["",""], teamBPlayers:["",""], winTarget:11, winBy:2, servingTeam:"a", orientation:"left" },
+  lsSetup: { teamAPlayers:["",""], teamBPlayers:["",""], winTarget:11, winBy:2, bestOf:1, servingTeam:"a", orientation:"left" },
   lsStep: "settings",
   lsPlacements: { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null },
   lsSelectedChip: null,
-  lsGame: null
+  lsMatch: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -1161,9 +1161,10 @@ function lsGoToPositioning(){
   if(new Set([a1,a2,b1,b2]).size < 4){ showToast("All 4 player names must be different"); return; }
   const winTarget = +document.getElementById("ls-target").value;
   const winBy = +document.getElementById("ls-winby").value;
+  const bestOf = +document.getElementById("ls-bestof").value;
   const servingTeam = document.getElementById("ls-servingteam").value;
   const orientation = document.getElementById("ls-orientation").value;
-  state.lsSetup = { teamAPlayers:[a1,a2], teamBPlayers:[b1,b2], winTarget, winBy, servingTeam, orientation };
+  state.lsSetup = { teamAPlayers:[a1,a2], teamBPlayers:[b1,b2], winTarget, winBy, bestOf, servingTeam, orientation };
   state.lsPlacements = { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null };
   state.lsSelectedChip = null;
   state.lsStep = "position";
@@ -1222,7 +1223,7 @@ function lsConfirmStart(){
   const servingQuadKey = Object.keys(layout.quadrants).find(k=>layout.quadrants[k].team===state.lsSetup.servingTeam && layout.quadrants[k].courtSide==="right");
   const firstServer = state.lsPlacements[servingQuadKey];
   const setup = Object.assign({}, state.lsSetup, { firstServer, initialPositions });
-  state.lsGame = lsCreateInitialGameState(setup);
+  state.lsMatch = lsCreateMatch(setup);
   haptic("medium");
   render();
 }
@@ -1267,6 +1268,58 @@ function lsSwitchSides(state){
   return next;
 }
 function lsSwitchThreshold(winTarget){ return Math.ceil(winTarget/2); }
+/* ===== BEST-OF-N MATCH WRAPPER (tested standalone, see build notes) ===== */
+function lsCreateMatch(matchSetup){
+  const game1 = lsCreateInitialGameState(matchSetup);
+  return { matchSetup, games:[game1], gamesWonA:0, gamesWonB:0, matchOver:false, matchWinner:null };
+}
+function lsCurrentGame(match){ return match.games[match.games.length-1]; }
+function lsApplyMatchRally(match, rallyWinnerTeam){
+  if(match.matchOver) return match;
+  const next = JSON.parse(JSON.stringify(match));
+  const idx = next.games.length-1;
+  next.games[idx] = lsApplyRally(next.games[idx], rallyWinnerTeam);
+  const g = next.games[idx];
+  if(g.gameOver){
+    if(g.winner==="a") next.gamesWonA++; else next.gamesWonB++;
+    const needed = Math.ceil(next.matchSetup.bestOf/2);
+    if(next.gamesWonA>=needed || next.gamesWonB>=needed){
+      next.matchOver = true;
+      next.matchWinner = next.gamesWonA>next.gamesWonB ? "a" : "b";
+    }
+  }
+  return next;
+}
+function lsUndoMatchRally(match){
+  const next = JSON.parse(JSON.stringify(match));
+  const idx = next.games.length-1;
+  const g = next.games[idx];
+  if(g.eventLog.length>0){
+    next.games[idx] = lsUndoLastRally(g);
+  } else if(idx>0){
+    next.games.pop();
+    const prevG = next.games[next.games.length-1];
+    if(prevG.winner==="a") next.gamesWonA--; else next.gamesWonB--;
+    next.matchOver = false; next.matchWinner = null;
+  }
+  return next;
+}
+function lsStartNextGame(match){
+  if(!match.games.length) return match;
+  const lastGame = lsCurrentGame(match);
+  if(!lastGame.gameOver) return match;
+  const loser = lastGame.winner==="a" ? "b" : "a"; // official rule: loser of previous game serves first next game
+  const firstServer = lastGame.positions[loser].right;
+  const newGameSetup = Object.assign({}, match.matchSetup, {
+    servingTeam: loser, firstServer,
+    orientation: lastGame.orientation,
+    initialPositions: lastGame.positions
+  });
+  const next = JSON.parse(JSON.stringify(match));
+  next.games.push(lsCreateInitialGameState(newGameSetup));
+  return next;
+}
+function lsMatchScoreSummary(match){ return match.gamesWonA + "-" + match.gamesWonB; }
 function lsSideOut(state){
   state.servingTeam = state.servingTeam==='a' ? 'b' : 'a';
   state.serverNum = 1;
@@ -2722,7 +2775,7 @@ function renderSessionViewer(){
   `;
 }
 function renderLiveScorePage(){
-  if(state.lsGame) return renderLiveScoreActive();
+  if(state.lsMatch) return renderLiveScoreActive();
   if(state.lsStep==="position") return renderLiveScorePositioning();
   return renderLiveScoreSetup();
 }
@@ -2751,6 +2804,10 @@ function renderLiveScoreSetup(){
         <div class="field"><label>Win by</label><select id="ls-winby">
           <option value="1" ${f.winBy===1?"selected":""}>1</option>
           <option value="2" ${f.winBy===2?"selected":""}>2</option>
+        </select></div>
+        <div class="field"><label>Best of</label><select id="ls-bestof">
+          <option value="1" ${f.bestOf===1?"selected":""}>1 game</option>
+          <option value="3" ${f.bestOf===3?"selected":""}>3 games</option>
         </select></div>
       </div>
       <div class="row">
@@ -2832,9 +2889,11 @@ function renderLiveScoreServerConfirm(layout){
     </div>`;
 }
 function renderLiveScoreActive(){
-  const g = state.lsGame;
+  const match = state.lsMatch;
+  const g = lsCurrentGame(match);
   const layout = lsComputeLayout({servingTeam: g.setup.servingTeam, orientation: g.orientation});
   const servingLabel = g.servingTeam==="a" ? "Team A" : "Team B";
+  const bestOf = match.matchSetup.bestOf;
 
   const quadHtml = (key) => {
     const q = layout.quadrants[key];
@@ -2848,9 +2907,40 @@ function renderLiveScoreActive(){
       </div>`;
   };
 
+  const matchProgressNote = bestOf>1 ? `<p class="help" style="text-align:center; margin:0 0 4px;">Game ${match.games.length} of up to ${bestOf} &middot; Games won: Team A ${match.gamesWonA} &ndash; Team B ${match.gamesWonB}</p>` : "";
+
+  if(match.matchOver){
+    return `
+      <button class="back-link" data-action="ls-back-to-setup">&larr; End test / new setup</button>
+      <div class="card">
+        ${matchProgressNote}
+        <div class="ls-gameover">
+          <h2>Match over &mdash; Team ${match.matchWinner==="a"?"A":"B"} wins ${lsMatchScoreSummary(match)}</h2>
+          <p class="help">${match.games.map((mg,i)=>`Game ${i+1}: ${Math.max(mg.scoreA,mg.scoreB)}-${Math.min(mg.scoreA,mg.scoreB)} (Team ${mg.winner==="a"?"A":"B"})`).join(" &middot; ")}</p>
+          <button class="btn btn-ink btn-wide" data-action="ls-rematch" style="margin:14px 0 10px;">Rematch (same players)</button>
+          <button class="btn btn-outline btn-wide" data-action="ls-back-to-setup">New setup</button>
+        </div>
+      </div>`;
+  }
+
+  if(g.gameOver){
+    return `
+      <button class="back-link" data-action="ls-back-to-setup">&larr; End test / new setup</button>
+      <div class="card">
+        ${matchProgressNote}
+        <div class="ls-gameover">
+          <h2>Game ${match.games.length} over &mdash; Team ${g.winner==="a"?"A":"B"} wins ${Math.max(g.scoreA,g.scoreB)}-${Math.min(g.scoreA,g.scoreB)}</h2>
+          <p class="sub">Loser serves first next game, per the standard rule.</p>
+          <button class="btn btn-ink btn-wide" data-action="ls-start-next-game" style="margin-bottom:10px;">Start Game ${match.games.length+1}</button>
+          <button class="btn btn-outline btn-wide" data-action="ls-undo">Undo last rally (reopens this game)</button>
+        </div>
+      </div>`;
+  }
+
   return `
     <button class="back-link" data-action="ls-back-to-setup">&larr; End test / new setup</button>
     <div class="card">
+      ${matchProgressNote}
       <div class="ls-score-display">
         <div class="ls-score-num">${lsScoreLabel(g)}</div>
         <div class="ls-serving-note">${servingLabel} serving &middot; <b>${g.currentServer}</b> to serve</div>
@@ -2860,21 +2950,14 @@ function renderLiveScoreActive(){
         <div class="ls-net"></div>
         <div class="ls-position-col">${quadHtml("topRight")}${quadHtml("bottomRight")}</div>
       </div>
-      ${(!g.gameOver && !g.sidesSwitched && Math.max(g.scoreA,g.scoreB)>=lsSwitchThreshold(g.winTarget)) ? `
+      ${(!g.sidesSwitched && Math.max(g.scoreA,g.scoreB)>=lsSwitchThreshold(g.winTarget)) ? `
         <button class="btn btn-outline btn-wide" data-action="ls-switch-sides" style="margin-bottom:14px; border-color:var(--court); color:var(--court);">Switch sides</button>
       ` : ""}
-      ${g.gameOver ? `
-        <div class="ls-gameover">
-          <h2>Game over &mdash; Team ${g.winner==="a"?"A":"B"} wins ${Math.max(g.scoreA,g.scoreB)}-${Math.min(g.scoreA,g.scoreB)}</h2>
-          <button class="btn btn-ink btn-wide" data-action="ls-rematch" style="margin-bottom:10px;">Rematch (same players)</button>
-          <button class="btn btn-outline btn-wide" data-action="ls-back-to-setup">New setup</button>
-        </div>` : `
-        <div class="ls-buttons">
-          <button class="ls-point-btn" data-action="ls-point" data-team="${layout.leftTeam}">Rally Winner<br><b>Team ${layout.leftTeam==="a"?"A":"B"}</b></button>
-          <button class="ls-point-btn" data-action="ls-point" data-team="${layout.rightTeam}">Rally Winner<br><b>Team ${layout.rightTeam==="a"?"A":"B"}</b></button>
-        </div>
-        <button class="btn btn-outline btn-wide" data-action="ls-undo" ${g.eventLog.length===0?"disabled":""}>Undo last rally</button>
-      `}
+      <div class="ls-buttons">
+        <button class="ls-point-btn" data-action="ls-point" data-team="${layout.leftTeam}">Rally Winner<br><b>Team ${layout.leftTeam==="a"?"A":"B"}</b></button>
+        <button class="ls-point-btn" data-action="ls-point" data-team="${layout.rightTeam}">Rally Winner<br><b>Team ${layout.rightTeam==="a"?"A":"B"}</b></button>
+      </div>
+      <button class="btn btn-outline btn-wide" data-action="ls-undo" ${(g.eventLog.length===0 && match.games.length===1)?"disabled":""}>Undo last rally</button>
       <p class="help" style="margin-top:14px; text-align:center;">${g.eventLog.filter(e=>e.type==="rally").length} rall${g.eventLog.filter(e=>e.type==="rally").length===1?"y":"ies"} recorded this game &middot; win to ${g.winTarget}, win by ${g.winBy}</p>
     </div>`;
 }
@@ -3574,11 +3657,12 @@ function bindEvents(){
     else if(action==="ls-swap-servers") lsSwapServingPair();
     else if(action==="ls-swap-receivers") lsSwapReceivingPair();
     else if(action==="ls-confirm-start") lsConfirmStart();
-    else if(action==="ls-point") { state.lsGame = lsApplyRally(state.lsGame, el.dataset.team); haptic("light"); render(); }
-    else if(action==="ls-undo") { state.lsGame = lsUndoLastRally(state.lsGame); haptic("medium"); render(); }
-    else if(action==="ls-switch-sides") { state.lsGame = lsSwitchSides(state.lsGame); haptic("medium"); render(); }
-    else if(action==="ls-rematch") { state.lsGame = lsCreateInitialGameState(state.lsGame.setup); haptic("medium"); render(); }
-    else if(action==="ls-back-to-setup") { state.lsGame = null; state.lsStep="settings"; state.lsPlacements={topLeft:null,bottomLeft:null,topRight:null,bottomRight:null}; state.lsSelectedChip=null; render(); }
+    else if(action==="ls-point") { state.lsMatch = lsApplyMatchRally(state.lsMatch, el.dataset.team); haptic("light"); render(); }
+    else if(action==="ls-undo") { state.lsMatch = lsUndoMatchRally(state.lsMatch); haptic("medium"); render(); }
+    else if(action==="ls-switch-sides") { const m=state.lsMatch; const idx=m.games.length-1; m.games[idx] = lsSwitchSides(m.games[idx]); haptic("medium"); render(); }
+    else if(action==="ls-start-next-game") { state.lsMatch = lsStartNextGame(state.lsMatch); haptic("medium"); render(); }
+    else if(action==="ls-rematch") { state.lsMatch = lsCreateMatch(state.lsMatch.matchSetup); haptic("medium"); render(); }
+    else if(action==="ls-back-to-setup") { state.lsMatch = null; state.lsStep="settings"; state.lsPlacements={topLeft:null,bottomLeft:null,topRight:null,bottomRight:null}; state.lsSelectedChip=null; render(); }
     else if(action==="compute-partnerships") await computePartnerships();
     else if(action==="toggle-partnership-detail") { const idx=+el.dataset.idx; state.expandedPartnership = state.expandedPartnership===idx ? null : idx; render(); }
     else if(action==="run-h2h") await runH2H();
