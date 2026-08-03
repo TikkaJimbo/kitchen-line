@@ -185,6 +185,27 @@
   .match-card.bye{opacity:0.5;}
   .court-tag{background:var(--ball); color:var(--ink); font-size:10px; font-weight:800; padding:3px 9px; border-radius:999px; text-transform:uppercase; letter-spacing:0.04em; flex:0 0 auto;}
   .predict-tag{flex:1 1 100%; font-size:11.5px; color:var(--court); font-weight:700;}
+  .ls-score-display{text-align:center; margin-bottom:18px;}
+  .ls-score-num{font-family:'Oswald',sans-serif; font-weight:600; font-size:52px; color:var(--ink); line-height:1;}
+  .ls-serving-note{font-size:13px; color:var(--muted); font-weight:700; margin-top:6px;}
+  .ls-serving-note b{color:var(--ink);}
+  .ls-position-court{display:flex; border:2px solid var(--ink); border-radius:12px; overflow:hidden; margin-bottom:16px; min-height:220px;}
+  .ls-position-col{flex:1; display:flex; flex-direction:column;}
+  .ls-quad{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:14px 8px; background:var(--paper); border-bottom:1px dashed var(--line); position:relative;}
+  .ls-position-col .ls-quad:last-child{border-bottom:none;}
+  .ls-quad.serving{background:rgba(215,230,57,0.3);}
+  .ls-quad.filled{background:rgba(14,92,85,0.06);}
+  .ls-quad.targetable{background:rgba(215,230,57,0.18); cursor:pointer;}
+  .ls-quad-team{font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); font-weight:800; opacity:0.7;}
+  .ls-quad-court{font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--court); font-weight:700;}
+  .ls-quad-occupant{font-weight:800; font-size:15px; margin-top:2px;}
+  .ls-net{width:5px; background:repeating-linear-gradient(180deg, var(--ink) 0 8px, transparent 8px 14px); flex:0 0 auto;}
+  .ls-buttons{display:flex; gap:10px; margin-bottom:12px;}
+  .ls-point-btn{flex:1; padding:22px 10px; border-radius:14px; border:2px solid var(--ink); background:var(--court); color:#fff; font-family:'Oswald',sans-serif; font-weight:600; font-size:16px; line-height:1.5; text-transform:uppercase; cursor:pointer;}
+  .ls-point-btn:active{transform:scale(0.97);}
+  .ls-point-btn b{font-size:19px;}
+  .ls-gameover{text-align:center; padding:16px 0 4px;}
+  .ls-gameover h2{margin-bottom:16px; font-size:19px;}
   .side{font-weight:800; font-size:13.5px; flex:1; min-width:110px;}
   .side.win{color:var(--court);}
   .score-inputs{display:flex; align-items:center; gap:6px;}
@@ -380,7 +401,12 @@ let state = {
   matchupDifficulty: null,
   matchupDifficultyIsForecast: false,
   playerLists: [],
-  listBuilder: { name: "", players: [] }
+  listBuilder: { name: "", players: [] },
+  lsSetup: { teamAPlayers:["",""], teamBPlayers:["",""], winTarget:11, winBy:2, servingTeam:"a", orientation:"left" },
+  lsStep: "settings",
+  lsPlacements: { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null },
+  lsSelectedChip: null,
+  lsGame: null
 };
 
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
@@ -1126,6 +1152,136 @@ async function computeMatchPredictions(){
   render();
   showToast("Predictions ready");
 }
+/* ============================= LIVE SCORING ENGINE (tested standalone, see build notes) ============================= */
+function lsGoToPositioning(){
+  const a1 = document.getElementById("ls-a1").value.trim() || "Player A1";
+  const a2 = document.getElementById("ls-a2").value.trim() || "Player A2";
+  const b1 = document.getElementById("ls-b1").value.trim() || "Player B1";
+  const b2 = document.getElementById("ls-b2").value.trim() || "Player B2";
+  if(new Set([a1,a2,b1,b2]).size < 4){ showToast("All 4 player names must be different"); return; }
+  const winTarget = +document.getElementById("ls-target").value;
+  const winBy = +document.getElementById("ls-winby").value;
+  const servingTeam = document.getElementById("ls-servingteam").value;
+  const orientation = document.getElementById("ls-orientation").value;
+  state.lsSetup = { teamAPlayers:[a1,a2], teamBPlayers:[b1,b2], winTarget, winBy, servingTeam, orientation };
+  state.lsPlacements = { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null };
+  state.lsSelectedChip = null;
+  state.lsStep = "position";
+  render();
+}
+function lsPlacePlayer(key){
+  if(state.lsPlacements[key]) return; // occupied slots don't accept a new placement; remove via the chip's own x first
+  if(!state.lsSelectedChip){ showToast("Tap a player name first"); return; }
+  state.lsPlacements[key] = state.lsSelectedChip;
+  state.lsSelectedChip = null;
+  haptic("light");
+  render();
+}
+function lsUnplacePlayer(name){
+  Object.keys(state.lsPlacements).forEach(k=>{ if(state.lsPlacements[k]===name) state.lsPlacements[k]=null; });
+  render();
+}
+function lsSwapServingPair(){
+  const layout = lsComputeLayout(state.lsSetup);
+  const rightKey = Object.keys(layout.quadrants).find(k=>layout.quadrants[k].team===state.lsSetup.servingTeam && layout.quadrants[k].courtSide==="right");
+  const leftKey = Object.keys(layout.quadrants).find(k=>layout.quadrants[k].team===state.lsSetup.servingTeam && layout.quadrants[k].courtSide==="left");
+  const tmp = state.lsPlacements[rightKey];
+  state.lsPlacements[rightKey] = state.lsPlacements[leftKey];
+  state.lsPlacements[leftKey] = tmp;
+  haptic("light");
+  render();
+}
+function lsConfirmStart(){
+  const layout = lsComputeLayout(state.lsSetup);
+  const initialPositions = { a:{}, b:{} };
+  Object.keys(layout.quadrants).forEach(k=>{
+    const q = layout.quadrants[k];
+    initialPositions[q.team][q.courtSide] = state.lsPlacements[k];
+  });
+  const servingQuadKey = Object.keys(layout.quadrants).find(k=>layout.quadrants[k].team===state.lsSetup.servingTeam && layout.quadrants[k].courtSide==="right");
+  const firstServer = state.lsPlacements[servingQuadKey];
+  const setup = Object.assign({}, state.lsSetup, { firstServer, initialPositions });
+  state.lsGame = lsCreateInitialGameState(setup);
+  haptic("medium");
+  render();
+}
+function lsComputeLayout(setup){
+  const leftTeam = setup.orientation==='left' ? setup.servingTeam : (setup.servingTeam==='a'?'b':'a');
+  const rightTeam = leftTeam==='a' ? 'b' : 'a';
+  return {
+    leftTeam, rightTeam,
+    quadrants: {
+      topLeft: {team:leftTeam, courtSide:'left'},
+      bottomLeft: {team:leftTeam, courtSide:'right'},
+      topRight: {team:rightTeam, courtSide:'right'},
+      bottomRight: {team:rightTeam, courtSide:'left'}
+    }
+  };
+}
+function lsCreateInitialGameState(setup){
+  const { teamAPlayers, teamBPlayers, servingTeam, firstServer, winTarget, winBy, initialPositions } = setup;
+  let positions;
+  if(initialPositions){
+    positions = JSON.parse(JSON.stringify(initialPositions));
+  } else {
+    const servingPlayers = servingTeam==='a' ? teamAPlayers : teamBPlayers;
+    const partner = servingPlayers.find(p=>p!==firstServer);
+    const receivingPlayers = servingTeam==='a' ? teamBPlayers : teamAPlayers;
+    const otherTeam = servingTeam==='a' ? 'b' : 'a';
+    positions = {};
+    positions[servingTeam] = { right: firstServer, left: partner };
+    positions[otherTeam] = { right: receivingPlayers[0], left: receivingPlayers[1] };
+  }
+  return {
+    setup, scoreA:0, scoreB:0, servingTeam, serverNum:1, isFirstServe:true,
+    currentServer: firstServer, positions, winTarget, winBy, rallyLog:[], gameOver:false, winner:null
+  };
+}
+function lsSideOut(state){
+  state.servingTeam = state.servingTeam==='a' ? 'b' : 'a';
+  state.serverNum = 1;
+  state.currentServer = state.positions[state.servingTeam].right;
+}
+function lsApplyRally(state, rallyWinnerTeam){
+  if(state.gameOver) return state;
+  const next = JSON.parse(JSON.stringify(state));
+  const servingTeam = next.servingTeam;
+  next.rallyLog.push({ servingTeam, serverNum: next.serverNum, server: next.currentServer, rallyWinner: rallyWinnerTeam, scoreABefore: next.scoreA, scoreBBefore: next.scoreB });
+  if(rallyWinnerTeam === servingTeam){
+    if(servingTeam==='a') next.scoreA++; else next.scoreB++;
+    const p = next.positions[servingTeam];
+    next.positions[servingTeam] = { right: p.left, left: p.right };
+    next.isFirstServe = false;
+  } else {
+    if(next.isFirstServe){
+      lsSideOut(next);
+      next.isFirstServe = false;
+    } else if(next.serverNum === 1){
+      next.serverNum = 2;
+      const p = next.positions[servingTeam];
+      next.currentServer = (next.currentServer===p.right) ? p.left : p.right;
+    } else {
+      lsSideOut(next);
+    }
+  }
+  const leaderScore = Math.max(next.scoreA, next.scoreB);
+  const lead = Math.abs(next.scoreA-next.scoreB);
+  if(leaderScore>=next.winTarget && lead>=next.winBy){ next.gameOver=true; next.winner = next.scoreA>next.scoreB ? 'a':'b'; }
+  return next;
+}
+function lsUndoLastRally(state){
+  if(!state.rallyLog.length) return state;
+  const remaining = state.rallyLog.slice(0,-1);
+  let fresh = lsCreateInitialGameState(state.setup);
+  remaining.forEach(entry=>{ fresh = lsApplyRally(fresh, entry.rallyWinner); });
+  return fresh;
+}
+function lsScoreLabel(state){
+  const servingScore = state.servingTeam==='a' ? state.scoreA : state.scoreB;
+  const receivingScore = state.servingTeam==='a' ? state.scoreB : state.scoreA;
+  const displayServerNum = state.isFirstServe ? 2 : state.serverNum;
+  return servingScore+'-'+receivingScore+'-'+displayServerNum;
+}
 function partnershipTier(psi){
   if(psi>=9.0) return {stars:5, label:"Elite Partnership"};
   if(psi>=8.0) return {stars:4, label:"Strong Partnership"};
@@ -1858,6 +2014,7 @@ function render(){
   else if(state.route==="h2h") view.innerHTML = renderH2H();
   else if(state.route==="sessions") view.innerHTML = renderSessionViewer();
   else if(state.route==="partnerships") view.innerHTML = renderPartnershipsPage();
+  else if(state.route==="livescore") view.innerHTML = renderLiveScorePage();
   bindEvents();
 }
 
@@ -1903,6 +2060,7 @@ function renderHome(){
         <button class="btn btn-outline btn-sm" data-action="go-leaderboard">View full leaderboard</button>
         <button class="btn btn-outline btn-sm" data-action="go-h2h">Head-to-head</button>
         <button class="btn btn-outline btn-sm" data-action="go-partnerships">Top Partnerships</button>
+        <button class="btn btn-outline btn-sm" data-action="go-livescore" style="border-color:var(--court); color:var(--court);">🏓 Live Scoring (Preview)</button>
       </div>
     </div>
 
@@ -2530,6 +2688,158 @@ function renderSessionViewer(){
       `;}).join("")}
     </div>
   `;
+}
+function renderLiveScorePage(){
+  if(state.lsGame) return renderLiveScoreActive();
+  if(state.lsStep==="position") return renderLiveScorePositioning();
+  return renderLiveScoreSetup();
+}
+function renderLiveScoreSetup(){
+  const f = state.lsSetup;
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">Live Scoring &mdash; Preview</p>
+      <h2>Match settings</h2>
+      <p class="sub">Standalone sanity-check of the scoring engine &mdash; not yet connected to real tournaments, teams, or saved data.</p>
+      <div class="row">
+        <div class="field"><label>Team A &mdash; Player 1</label><input type="text" id="ls-a1" value="${f.teamAPlayers[0]}" placeholder="e.g. Alice"></div>
+        <div class="field"><label>Team A &mdash; Player 2</label><input type="text" id="ls-a2" value="${f.teamAPlayers[1]}" placeholder="e.g. Bob"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Team B &mdash; Player 1</label><input type="text" id="ls-b1" value="${f.teamBPlayers[0]}" placeholder="e.g. Carol"></div>
+        <div class="field"><label>Team B &mdash; Player 2</label><input type="text" id="ls-b2" value="${f.teamBPlayers[1]}" placeholder="e.g. Dave"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Win target</label><select id="ls-target">
+          <option value="11" ${f.winTarget===11?"selected":""}>11</option>
+          <option value="15" ${f.winTarget===15?"selected":""}>15</option>
+          <option value="21" ${f.winTarget===21?"selected":""}>21</option>
+        </select></div>
+        <div class="field"><label>Win by</label><select id="ls-winby">
+          <option value="1" ${f.winBy===1?"selected":""}>1</option>
+          <option value="2" ${f.winBy===2?"selected":""}>2</option>
+        </select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Serving team (toss winner)</label><select id="ls-servingteam">
+          <option value="a" ${f.servingTeam==="a"?"selected":""}>Team A</option>
+          <option value="b" ${f.servingTeam==="b"?"selected":""}>Team B</option>
+        </select></div>
+        <div class="field"><label>That team is sitting on my&hellip;</label><select id="ls-orientation">
+          <option value="left" ${f.orientation==="left"?"selected":""}>Left</option>
+          <option value="right" ${f.orientation==="right"?"selected":""}>Right</option>
+        </select></div>
+      </div>
+      <p class="help">Next, you'll place all 4 players in their real starting positions on the court.</p>
+      <button class="btn btn-ink btn-wide" data-action="ls-go-position">Next: position players</button>
+    </div>`;
+}
+function renderLiveScorePositioning(){
+  const f = state.lsSetup;
+  const layout = lsComputeLayout(f);
+  const allPlayers = [...f.teamAPlayers, ...f.teamBPlayers].filter(p=>p);
+  const placedNames = Object.values(state.lsPlacements).filter(p=>p);
+  const unplaced = allPlayers.filter(p=>!placedNames.includes(p));
+  const allPlaced = unplaced.length===0 && placedNames.length===4;
+
+  const quadHtml = (key, cornerLabel) => {
+    const q = layout.quadrants[key];
+    const teamLabel = q.team==="a" ? "Team A" : "Team B";
+    const courtLabel = q.courtSide==="right" ? "Right Court" : "Left Court";
+    const occupant = state.lsPlacements[key];
+    const selected = state.lsSelectedChip;
+    return `
+      <div class="ls-quad ${occupant?'filled':''} ${selected&&!occupant?'targetable':''}" data-action="ls-place" data-key="${key}">
+        <span class="ls-quad-team">${teamLabel}</span>
+        <span class="ls-quad-court">${courtLabel}</span>
+        <span class="ls-quad-occupant">${occupant||'&mdash;'}</span>
+      </div>`;
+  };
+
+  return `
+    <button class="back-link" data-action="ls-back-to-settings">&larr; Back to settings</button>
+    <div class="card">
+      <p class="eyebrow">Live Scoring &mdash; Preview</p>
+      <h2>Position the players</h2>
+      <p class="sub">Orient your phone the way you're sitting &mdash; net running top to bottom. Tap a player below, then tap the court position they're standing in.</p>
+      <div class="ls-position-court">
+        <div class="ls-position-col">
+          ${quadHtml("topLeft")}
+          ${quadHtml("bottomLeft")}
+        </div>
+        <div class="ls-net"></div>
+        <div class="ls-position-col">
+          ${quadHtml("topRight")}
+          ${quadHtml("bottomRight")}
+        </div>
+      </div>
+      <p class="help" style="text-align:center; margin:10px 0;">${unplaced.length ? "Tap a player, then tap their spot:" : "All 4 players placed."}</p>
+      <div class="chip-group" style="justify-content:center; margin-bottom:16px;">
+        ${unplaced.map(p=>`<span class="chip ${state.lsSelectedChip===p?'active':''}" data-action="ls-select-chip" data-name="${p}" style="cursor:pointer;">${p}</span>`).join("")}
+        ${placedNames.map(p=>`<span class="chip" data-action="ls-unplace" data-name="${p}" style="cursor:pointer; opacity:0.55;" title="Tap to remove">${p} &times;</span>`).join("")}
+      </div>
+      ${allPlaced ? renderLiveScoreServerConfirm(layout) : ""}
+    </div>`;
+}
+function renderLiveScoreServerConfirm(layout){
+  const f = state.lsSetup;
+  const servingQuadKey = Object.keys(layout.quadrants).find(k=> layout.quadrants[k].team===f.servingTeam && layout.quadrants[k].courtSide==="right");
+  const server = state.lsPlacements[servingQuadKey];
+  return `
+    <div class="card" style="background:var(--kitchen); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Ready to serve</p>
+      <h2 style="color:#fff;">${server} serves first</h2>
+      <p class="sub" style="color:#DCEDEA;">Right-court player on the serving side always serves first. If that's wrong, swap them below.</p>
+      <div class="chip-group" style="margin-bottom:16px;">
+        <button class="btn btn-outline btn-sm" data-action="ls-swap-servers" style="border-color:#fff; color:#fff;">Swap serving pair</button>
+      </div>
+      <button class="btn btn-ink btn-wide" data-action="ls-confirm-start" style="background:var(--ball); color:var(--ink); border-color:var(--ink);">Start match</button>
+    </div>`;
+}
+function renderLiveScoreActive(){
+  const g = state.lsGame;
+  const layout = lsComputeLayout(g.setup);
+  const servingLabel = g.servingTeam==="a" ? "Team A" : "Team B";
+
+  const quadHtml = (key) => {
+    const q = layout.quadrants[key];
+    const occupant = g.positions[q.team][q.courtSide];
+    const isServingTeam = q.team===g.servingTeam;
+    return `
+      <div class="ls-quad ${isServingTeam?'serving':''}">
+        <span class="ls-quad-team">${q.team==="a"?"Team A":"Team B"}</span>
+        <span class="ls-quad-court">${q.courtSide==="right"?"Right":"Left"}</span>
+        <span class="ls-quad-occupant">${occupant}${occupant===g.currentServer?' &#127952;':''}</span>
+      </div>`;
+  };
+
+  return `
+    <button class="back-link" data-action="ls-back-to-setup">&larr; End test / new setup</button>
+    <div class="card">
+      <div class="ls-score-display">
+        <div class="ls-score-num">${lsScoreLabel(g)}</div>
+        <div class="ls-serving-note">${servingLabel} serving &middot; <b>${g.currentServer}</b> to serve</div>
+      </div>
+      <div class="ls-position-court">
+        <div class="ls-position-col">${quadHtml("topLeft")}${quadHtml("bottomLeft")}</div>
+        <div class="ls-net"></div>
+        <div class="ls-position-col">${quadHtml("topRight")}${quadHtml("bottomRight")}</div>
+      </div>
+      ${g.gameOver ? `
+        <div class="ls-gameover">
+          <h2>Game over &mdash; Team ${g.winner==="a"?"A":"B"} wins ${Math.max(g.scoreA,g.scoreB)}-${Math.min(g.scoreA,g.scoreB)}</h2>
+          <button class="btn btn-ink btn-wide" data-action="ls-rematch" style="margin-bottom:10px;">Rematch (same players)</button>
+          <button class="btn btn-outline btn-wide" data-action="ls-back-to-setup">New setup</button>
+        </div>` : `
+        <div class="ls-buttons">
+          <button class="ls-point-btn" data-action="ls-point" data-team="a">Point<br><b>Team A</b></button>
+          <button class="ls-point-btn" data-action="ls-point" data-team="b">Point<br><b>Team B</b></button>
+        </div>
+        <button class="btn btn-outline btn-wide" data-action="ls-undo" ${g.rallyLog.length===0?"disabled":""}>Undo last rally</button>
+      `}
+      <p class="help" style="margin-top:14px; text-align:center;">${g.rallyLog.length} rall${g.rallyLog.length===1?"y":"ies"} recorded this game &middot; win to ${g.winTarget}, win by ${g.winBy}</p>
+    </div>`;
 }
 function renderPartnershipsPage(){
   if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Crunching partnership data\u2026</div>`;
@@ -3218,6 +3528,18 @@ function bindEvents(){
     else if(action==="go-back-from-profile") await goBackFromProfile();
     else if(action==="go-sessions") await openSessionViewer();
     else if(action==="go-partnerships") openPartnerships();
+    else if(action==="go-livescore") { state.route="livescore"; render(); }
+    else if(action==="ls-go-position") lsGoToPositioning();
+    else if(action==="ls-back-to-settings") { state.lsStep="settings"; render(); }
+    else if(action==="ls-select-chip") { state.lsSelectedChip = el.dataset.name; render(); }
+    else if(action==="ls-place") lsPlacePlayer(el.dataset.key);
+    else if(action==="ls-unplace") lsUnplacePlayer(el.dataset.name);
+    else if(action==="ls-swap-servers") lsSwapServingPair();
+    else if(action==="ls-confirm-start") lsConfirmStart();
+    else if(action==="ls-point") { state.lsGame = lsApplyRally(state.lsGame, el.dataset.team); haptic("light"); render(); }
+    else if(action==="ls-undo") { state.lsGame = lsUndoLastRally(state.lsGame); haptic("medium"); render(); }
+    else if(action==="ls-rematch") { state.lsGame = lsCreateInitialGameState(state.lsGame.setup); haptic("medium"); render(); }
+    else if(action==="ls-back-to-setup") { state.lsGame = null; state.lsStep="settings"; state.lsPlacements={topLeft:null,bottomLeft:null,topRight:null,bottomRight:null}; state.lsSelectedChip=null; render(); }
     else if(action==="compute-partnerships") await computePartnerships();
     else if(action==="toggle-partnership-detail") { const idx=+el.dataset.idx; state.expandedPartnership = state.expandedPartnership===idx ? null : idx; render(); }
     else if(action==="run-h2h") await runH2H();
