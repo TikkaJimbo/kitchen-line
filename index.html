@@ -1257,18 +1257,102 @@ async function computeMatchPredictions(){
   showToast("Predictions ready");
 }
 /* ============================= LIVE SCORING ENGINE (tested standalone, see build notes) ============================= */
-function typickleScoreMatch(groupId, matchId){
+function seedBracketFromGroups(qualifiersByGroup, groupCount, qualifiersPerGroup){
+  let seededTeamIds;
+  if(groupCount===2 && qualifiersPerGroup===2){
+    const [A1,A2] = qualifiersByGroup[0];
+    const [B1,B2] = qualifiersByGroup[1];
+    seededTeamIds = [A1,B2, B1,A2];
+  } else if(groupCount===4 && qualifiersPerGroup===1){
+    const [A] = qualifiersByGroup[0], [B] = qualifiersByGroup[1], [C] = qualifiersByGroup[2], [D] = qualifiersByGroup[3];
+    seededTeamIds = [A,C, B,D];
+  } else {
+    let tiers = [];
+    for(let r=0;r<qualifiersPerGroup;r++) tiers.push(qualifiersByGroup.map(g=>g[r]));
+    const flatSeeds = tiers.flat();
+    const half = Math.ceil(flatSeeds.length/2);
+    const h1 = flatSeeds.slice(0,half), h2 = flatSeeds.slice(half);
+    seededTeamIds = [];
+    for(let i=0;i<h1.length;i++){ seededTeamIds.push(h1[i]); if(h2[i]) seededTeamIds.push(h2[i]); }
+  }
+  const pairs = [];
+  for(let i=0;i<seededTeamIds.length;i+=2) pairs.push([seededTeamIds[i], seededTeamIds[i+1]]);
+  return pairs;
+}
+function makeTypickleBracket(pairs, teams){
+  const round1 = pairs.map((pair,i)=>{
+    const a = teams.find(t=>t.id===pair[0]) ? {id:pair[0], label:teams.find(t=>t.id===pair[0]).name} : {id:"BYE-"+i+"a", label:"Bye", bye:true};
+    const b = teams.find(t=>t.id===pair[1]) ? {id:pair[1], label:teams.find(t=>t.id===pair[1]).name} : {id:"BYE-"+i+"b", label:"Bye", bye:true};
+    return {
+      id:"tko-1-"+i, round:1, a, b, matchCode:null, status:(a.bye||b.bye)?"complete":"scheduled",
+      gamesWonA:null, gamesWonB:null, winner: a.bye?b.id:(b.bye?a.id:null), isBye:!!(a.bye||b.bye),
+      pointsForA:null, pointsForB:null
+    };
+  });
+  const rounds = [round1];
+  let count = round1.length, r = 2;
+  while(count>1){
+    count/=2;
+    const rm = [];
+    for(let i=0;i<count;i++) rm.push({id:"tko-"+r+"-"+i, round:r, a:null, b:null, matchCode:null, status:"pending", gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null});
+    rounds.push(rm); r++;
+  }
+  propagateBracket(rounds);
+  propagateBracket(rounds);
+  propagateBracket(rounds);
+  rounds.forEach(round=>round.forEach(m=>{ if(m.a && m.b && m.status==="pending") m.status="scheduled"; }));
+  return rounds;
+}
+function typickleFindMatch(ev, matchId){
+  for(const g of ev.groups){
+    const m = g.matches.find(x=>x.id===matchId);
+    if(m) return {match:m, location:"group", groupId:g.id};
+  }
+  if(ev.bracket){
+    for(const round of ev.bracket){
+      const m = round.find(x=>x.id===matchId);
+      if(m) return {match:m, location:"bracket"};
+    }
+  }
+  if(ev.thirdPlaceMatch && ev.thirdPlaceMatch.id===matchId) return {match:ev.thirdPlaceMatch, location:"thirdplace"};
+  return null;
+}
+async function confirmAndLockGroups(){
   const ev = state.typickleEvent;
-  const group = ev.groups.find(g=>g.id===groupId);
-  const match = group.matches.find(m=>m.id===matchId);
+  const allComplete = ev.groups.every(g=>g.matches.every(m=>m.status==="complete"));
+  if(!allComplete){ showToast("All group matches must be complete before locking"); return; }
+  const qualifiersByGroup = ev.groups.map(g=>{
+    const standings = computeGroupStandings(g, ev.teams);
+    return standings.slice(0, ev.settings.qualifiersPerGroup).map(s=>s.id);
+  });
+  const pairs = seedBracketFromGroups(qualifiersByGroup, ev.settings.groupCount, ev.settings.qualifiersPerGroup);
+  ev.bracket = makeTypickleBracket(pairs, ev.teams);
+  ev.status = "knockout";
+  if(ev.settings.hasThirdPlacePlayoff) ev.thirdPlaceMatch = null;
+  try{
+    await saveTypickleEvent(ev.code, ev);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save the bracket \u2014 check your connection and try again");
+    return;
+  }
+  showToast("Groups locked \u2014 bracket generated");
+  haptic("medium");
+  render();
+}
+function typickleScoreMatch(matchId){
+  const ev = state.typickleEvent;
+  const found = typickleFindMatch(ev, matchId);
+  if(!found){ showToast("Match not found"); return; }
+  const match = found.match;
   const teamA = ev.teams.find(t=>t.id===match.a.id);
   const teamB = ev.teams.find(t=>t.id===match.b.id);
+  const isKnockout = found.location!=="group";
   state.lsSetup = {
     teamAPlayers: teamA.players.slice(), teamBPlayers: teamB.players.slice(),
-    winTarget: 11, winBy: 2, bestOf: 1,
+    winTarget: 11, winBy: 2, bestOf: isKnockout ? 3 : 1,
     servingTeam: "a", orientation: "left"
   };
-  state.lsTypickleRef = { eventCode: ev.code, groupId, matchId, teamAId: teamA.id, teamBId: teamB.id };
+  state.lsTypickleRef = { eventCode: ev.code, matchId, teamAId: teamA.id, teamBId: teamB.id };
   state.lsStep = "settings";
   state.lsMatch = null;
   state.lsPlacements = {topLeft:null,bottomLeft:null,topRight:null,bottomRight:null};
@@ -1276,7 +1360,7 @@ function typickleScoreMatch(groupId, matchId){
   state.route = "livescore";
   render();
 }
-async function typickleResumeMatch(matchCode, groupId, matchId){
+async function typickleResumeMatch(matchCode){
   const saved = await loadLiveMatch(matchCode);
   if(!saved){ showToast("Couldn't find that match"); return; }
   state.lsMatch = saved;
@@ -1294,9 +1378,9 @@ async function syncTypickleResult(){
   try{
     const ev = await loadTypickleEvent(ref.eventCode);
     if(!ev) return;
-    const group = ev.groups.find(g=>g.id===ref.groupId);
-    const gm = group && group.matches.find(m=>m.id===ref.matchId);
-    if(!gm) return;
+    const found = typickleFindMatch(ev, ref.matchId);
+    if(!found) return;
+    const gm = found.match;
     let pointsForA=0, pointsForB=0;
     match.games.forEach(g=>{ pointsForA += g.scoreA; pointsForB += g.scoreB; });
     gm.status = "complete";
@@ -1304,6 +1388,24 @@ async function syncTypickleResult(){
     gm.winner = match.matchWinner==="a" ? ref.teamAId : ref.teamBId;
     gm.pointsForA = pointsForA; gm.pointsForB = pointsForB;
     gm.matchCode = state.lsMatchCode;
+
+    if(found.location==="bracket"){
+      propagateBracket(ev.bracket);
+      ev.bracket.forEach(round=>round.forEach(m=>{ if(m.a && m.b && m.status==="pending") m.status="scheduled"; }));
+      // once both semifinal losers are known, populate the 3rd place match
+      if(ev.settings.hasThirdPlacePlayoff && ev.bracket.length>=2){
+        const semis = ev.bracket[ev.bracket.length-2];
+        if(semis.length===2 && semis.every(m=>m.status==="complete") && !ev.thirdPlaceMatch){
+          const loserOf = m => m.winner===m.a.id ? m.b : m.a;
+          const l1 = loserOf(semis[0]), l2 = loserOf(semis[1]);
+          if(!l1.bye && !l2.bye){
+            ev.thirdPlaceMatch = { id:"tko-3rd", round:0, a:l1, b:l2, matchCode:null, status:"scheduled", gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null };
+          }
+        }
+      }
+      if(ev.bracket[ev.bracket.length-1].every(m=>m.status==="complete")) ev.status = "complete";
+    }
+
     await saveTypickleEvent(ref.eventCode, ev);
     match.typickleResultSynced = true;
     if(state.typickleEvent && state.typickleEvent.code===ref.eventCode) state.typickleEvent = ev;
@@ -3190,6 +3292,23 @@ function renderTypickleEvent(){
   const ev = state.typickleEvent;
   if(!ev) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Event not found</h2></div>`;
   const teamName = id => (ev.teams.find(t=>t.id===id)||{}).name || "?";
+  const matchCard = (m, roundLabel) => `
+    <div class="match-card">
+      ${roundLabel ? `<span class="court-tag">${roundLabel}</span>` : ""}
+      <div class="side ${m.status==="complete"&&m.winner===m.a.id?"win":""}">${m.a && !m.a.bye ? teamName(m.a.id) : (m.a?"Bye":"TBD")}</div>
+      <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? `${m.gamesWonA}-${m.gamesWonB}` : m.status==="live" ? "LIVE" : "&mdash;"}</div>
+      <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${m.b && !m.b.bye ? teamName(m.b.id) : (m.b?"Bye":"TBD")}</div>
+      ${m.status==="scheduled" ? `<button class="btn btn-ink btn-sm" data-action="typickle-score-match" data-match="${m.id}">Score this match</button>` : ""}
+      ${m.status==="live" ? `<button class="btn btn-outline btn-sm" data-action="typickle-resume-match" data-code="${m.matchCode}">Resume</button>` : ""}
+    </div>`;
+  const allGroupsComplete = ev.groups.every(g=>g.matches.every(m=>m.status==="complete"));
+  const roundName = (round, totalRounds) => {
+    const fromEnd = totalRounds - round;
+    if(fromEnd===0) return "Final";
+    if(fromEnd===1) return "Semifinal";
+    if(fromEnd===2) return "Quarterfinal";
+    return "Round "+round;
+  };
   return `
     <button class="back-link" data-action="go-home">&larr; Back to Home</button>
     <div class="card" style="background:var(--court); border-color:var(--ink);">
@@ -3204,19 +3323,33 @@ function renderTypickleEvent(){
         <p class="eyebrow">${g.label}</p>
         <div class="table-scroll"><table>
           <tr><th>#</th><th>Team</th><th>P</th><th>W-L</th><th>+/-</th></tr>
-          ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.pf-r.pa>0?"+":""}${r.played?r.pf-r.pa:"&mdash;"}</td></tr>`).join("")}
+          ${standings.map((r,i)=>`<tr class="${i<ev.settings.qualifiersPerGroup?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.pf-r.pa>0?"+":""}${r.played?r.pf-r.pa:"&mdash;"}</td></tr>`).join("")}
         </table></div>
         <p class="eyebrow" style="margin-top:16px;">Matches</p>
-        ${g.matches.map(m=>`
-          <div class="match-card">
-            <div class="side ${m.status==="complete"&&m.winner===m.a.id?"win":""}">${teamName(m.a.id)}</div>
-            <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? `${m.gamesWonA}-${m.gamesWonB}` : m.status==="live" ? "LIVE" : "&mdash;"}</div>
-            <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${teamName(m.b.id)}</div>
-            ${m.status==="scheduled" ? `<button class="btn btn-ink btn-sm" data-action="typickle-score-match" data-group="${g.id}" data-match="${m.id}">Score this match</button>` : ""}
-            ${m.status==="live" ? `<button class="btn btn-outline btn-sm" data-action="typickle-resume-match" data-code="${m.matchCode}" data-group="${g.id}" data-match="${m.id}">Resume</button>` : ""}
-          </div>`).join("")}
+        ${g.matches.map(m=>matchCard(m)).join("")}
       </div>`;
-    }).join("")}`;
+    }).join("")}
+    ${(!ev.bracket && allGroupsComplete) ? `
+      <div class="card" style="background:var(--kitchen); border-color:var(--ink);">
+        <p class="eyebrow">Groups complete</p>
+        <p class="sub" style="margin-top:0;">Locking groups generates the knockout bracket from final standings. This can't be undone.</p>
+        <button class="btn btn-ink btn-wide" data-action="typickle-confirm-lock">Confirm &amp; Lock Groups</button>
+      </div>` : ""}
+    ${(!ev.bracket && !allGroupsComplete) ? `<p class="help" style="text-align:center; margin:16px 0;">Bracket unlocks once every group match is complete.</p>` : ""}
+    ${ev.bracket ? `
+      <div class="card">
+        <p class="eyebrow">Knockout Bracket</p>
+        ${ev.bracket.map((round,ri)=>`
+          <p class="eyebrow" style="margin-top:14px; color:var(--court);">${roundName(ri+1, ev.bracket.length)}</p>
+          ${round.map(m=>matchCard(m)).join("")}
+        `).join("")}
+        ${ev.thirdPlaceMatch ? `<p class="eyebrow" style="margin-top:14px; color:var(--ball);">3rd Place Playoff</p>${matchCard(ev.thirdPlaceMatch)}` : ""}
+      </div>` : ""}
+    ${ev.status==="complete" ? `
+      <div class="card" style="background:var(--court); border-color:var(--ink); text-align:center;">
+        <p class="eyebrow" style="color:var(--ball);">Champion</p>
+        <h2 style="color:#fff;">${teamName(ev.bracket[ev.bracket.length-1][0].winner)}</h2>
+      </div>` : ""}`;
 }
 function renderLiveScoreSetup(){
   const f = state.lsSetup;
@@ -4108,8 +4241,9 @@ function bindEvents(){
     else if(action==="typickle-auto-pair") typickleAutoPair(el.dataset.balanced==="true");
     else if(action==="typickle-remove-team") typickleRemoveTeam(+el.dataset.idx);
     else if(action==="typickle-create-event") await createTypickleEvent();
-    else if(action==="typickle-score-match") typickleScoreMatch(el.dataset.group, el.dataset.match);
-    else if(action==="typickle-resume-match") await typickleResumeMatch(el.dataset.code, el.dataset.group, el.dataset.match);
+    else if(action==="typickle-score-match") typickleScoreMatch(el.dataset.match);
+    else if(action==="typickle-resume-match") await typickleResumeMatch(el.dataset.code);
+    else if(action==="typickle-confirm-lock") await confirmAndLockGroups();
     else if(action==="typickle-back-to-event") await typickleBackToEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
