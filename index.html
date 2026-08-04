@@ -1567,6 +1567,12 @@ function typickleRenameTeam(idx){
   const val = input.value.trim();
   state.typickleSetup.teams[idx].name = val || `Team ${idx+1}`;
 }
+function typickleUpdateGroupSettings(){
+  const f = state.typickleSetup;
+  f.groupCount = +document.getElementById("typickle-group-count").value;
+  f.qualifiersPerGroup = +document.getElementById("typickle-qualifiers").value;
+  render();
+}
 function typickleRemoveTeam(idx){
   state.typickleSetup.teams.splice(idx,1);
   render();
@@ -3400,10 +3406,10 @@ function renderTypickleSetup(){
     <div class="card">
       <p class="eyebrow">Groups & Knockout</p>
       <div class="row">
-        <div class="field"><label>Number of groups</label><select id="typickle-group-count">
+        <div class="field"><label>Number of groups</label><select id="typickle-group-count" onchange="typickleUpdateGroupSettings()">
           ${[2,3,4,6,8].map(n=>`<option value="${n}" ${f.groupCount===n?"selected":""}>${n}</option>`).join("")}
         </select></div>
-        <div class="field"><label>Qualifiers per group</label><select id="typickle-qualifiers">
+        <div class="field"><label>Qualifiers per group</label><select id="typickle-qualifiers" onchange="typickleUpdateGroupSettings()">
           ${[1,2,3].map(n=>`<option value="${n}" ${f.qualifiersPerGroup===n?"selected":""}>${n}</option>`).join("")}
         </select></div>
       </div>
