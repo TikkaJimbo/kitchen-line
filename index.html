@@ -379,6 +379,7 @@ let state = {
   tCode: null,
   pollHandle: null,
   profile: null,
+  profileTypickleHistory: [],
   locationName: null,
   locationStats: null,
   leaderboardRows: null,
@@ -419,6 +420,7 @@ let state = {
   typickleEvent: null,
   typickleLoading: false,
   typickleCourtNum: null,
+  typickleViewerEvent: null,
   lsTypickleRef: null
 };
 
@@ -1338,6 +1340,16 @@ async function confirmAndLockGroups(){
   }
   showToast("Groups locked \u2014 bracket generated");
   haptic("medium");
+  render();
+}
+async function openTypickleViewer(){
+  const input = document.getElementById("typickleViewerCodeInput");
+  const code = input.value.trim().toUpperCase();
+  if(!code){ showToast("Enter an event code"); return; }
+  state.loading = true; state.route = "typickle-viewer"; render();
+  state.typickleViewerEvent = await loadTypickleEvent(code);
+  state.loading = false;
+  if(!state.typickleViewerEvent) showToast("No tournament found with that code");
   render();
 }
 function typickleSetCourt(){
@@ -2532,6 +2544,7 @@ function render(){
   else if(state.route==="typickle-setup") view.innerHTML = renderTypickleSetup();
   else if(state.route==="typickle-event") view.innerHTML = renderTypickleEvent();
   else if(state.route==="typickle-court") view.innerHTML = renderTypickleCourtQueue();
+  else if(state.route==="typickle-viewer") view.innerHTML = renderTypickleViewer();
   bindEvents();
 }
 
@@ -2587,6 +2600,10 @@ function renderHome(){
       <div class="chip-group">
         <button class="btn btn-outline btn-sm" data-action="go-livescore" style="border-color:var(--court); color:var(--court);">🏓 Live Scoring (Preview)</button>
         <button class="btn btn-outline btn-sm" data-action="go-typickle-setup" style="border-color:var(--ball); color:var(--ink); background:rgba(215,230,57,0.2);">🏆 Typickle Tournament 1.0</button>
+      </div>
+      <div class="join-row" style="margin-top:12px;">
+        <input type="text" id="typickleViewerCodeInput" maxlength="6" placeholder="Event code e.g. 7QXPB">
+        <button class="btn btn-ink" data-action="typickle-view-event">View</button>
       </div>
     </div>
 
@@ -2977,6 +2994,7 @@ function renderProfile(){
         </div>
       </div>
     </div>
+    ${renderTypickleProfileHistory()}
     ${renderPassport(p)}
     ${renderAchievementBreakdown(p)}
     ${renderCareerBadges(p)}
@@ -2994,6 +3012,37 @@ function renderProfile(){
   `;
 }
 
+function renderTypickleProfileHistory(){
+  const hist = state.profileTypickleHistory;
+  if(!hist || !hist.length) return "";
+  const totalPlayed = hist.reduce((s,h)=>s+h.played,0);
+  const totalWins = hist.reduce((s,h)=>s+h.wins,0);
+  const totalLosses = hist.reduce((s,h)=>s+h.losses,0);
+  const totalDiff = hist.reduce((s,h)=>s+h.diff,0);
+  return `
+    <div class="card" style="background:var(--court); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Powered by Typickle Events</p>
+      <h2 style="color:#fff;">Tournament History</h2>
+      <p class="sub" style="color:#DCEDEA;">Kept separate from recreational Kitchen Line stats.</p>
+      <div class="stat-grid cols-4" style="margin-top:12px;">
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${totalPlayed}</div><div class="lbl" style="color:#B9CFCB;">Matches</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${totalWins}-${totalLosses}</div><div class="lbl" style="color:#B9CFCB;">W-L</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--kitchen);">${totalPlayed?Math.round((totalWins/totalPlayed)*100):0}%</div><div class="lbl" style="color:#B9CFCB;">Win rate</div></div>
+        <div class="stat-tile" style="background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2);"><div class="num" style="color:var(--ball);">${totalDiff>0?"+":""}${totalDiff}</div><div class="lbl" style="color:#B9CFCB;">Point diff</div></div>
+      </div>
+      ${hist.map(h=>`
+        <div class="history-row" style="border-bottom-color:rgba(255,255,255,0.14); margin-top:14px;">
+          <div>
+            <div class="loc" style="color:#fff;">${h.eventName}</div>
+            <div class="help" style="color:#B9CFCB; margin-top:2px;">${h.teamName} (with ${h.partner}) &middot; ${h.stageReached}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="color:var(--kitchen); font-weight:800;">${h.wins}-${h.losses} &middot; ${h.winPct}%</div>
+            <div class="help" style="color:#B9CFCB;">${h.diff>0?"+":""}${h.diff} pts</div>
+          </div>
+        </div>`).join("")}
+    </div>`;
+}
 function renderPassport(p){
   return `
     <div class="category-block" style="background:var(--ink); color:var(--kitchen); border-color:var(--ink);">
@@ -3357,6 +3406,56 @@ function renderTypickleEvent(){
         `).join("")}
         ${ev.thirdPlaceMatch ? `<p class="eyebrow" style="margin-top:14px; color:var(--ball);">3rd Place Playoff</p>${matchCard(ev.thirdPlaceMatch)}` : ""}
       </div>` : ""}
+    ${ev.status==="complete" ? `
+      <div class="card" style="background:var(--court); border-color:var(--ink); text-align:center;">
+        <p class="eyebrow" style="color:var(--ball);">Champion</p>
+        <h2 style="color:#fff;">${teamName(ev.bracket[ev.bracket.length-1][0].winner)}</h2>
+      </div>` : ""}`;
+}
+function renderTypickleViewer(){
+  if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading tournament\u2026</div>`;
+  const ev = state.typickleViewerEvent;
+  if(!ev) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Tournament not found</h2></div>`;
+  const teamName = id => (ev.teams.find(t=>t.id===id)||{}).name || "?";
+  const matchRow = m => `
+    <div class="match-card">
+      <div class="side ${m.status==="complete"&&m.winner===m.a.id?"win":""}">${m.a && !m.a.bye ? teamName(m.a.id) : (m.a?"Bye":"TBD")}</div>
+      <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? `${m.gamesWonA}-${m.gamesWonB}` : m.status==="live" ? "LIVE" : "&mdash;"}</div>
+      <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${m.b && !m.b.bye ? teamName(m.b.id) : (m.b?"Bye":"TBD")}</div>
+    </div>`;
+  const roundName = (round, totalRounds) => {
+    const fromEnd = totalRounds - round;
+    if(fromEnd===0) return "Final";
+    if(fromEnd===1) return "Semifinal";
+    if(fromEnd===2) return "Quarterfinal";
+    return "Round "+round;
+  };
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back to Home</button>
+    <div class="card" style="background:var(--court); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Live Tournament &mdash; Viewer</p>
+      <h2 style="color:#fff;">${ev.name}</h2>
+    </div>
+    ${ev.groups.map(g=>{
+      const standings = computeGroupStandings(g, ev.teams);
+      return `
+      <div class="card">
+        <p class="eyebrow">${g.label}</p>
+        <div class="table-scroll"><table>
+          <tr><th>#</th><th>Team</th><th>P</th><th>W-L</th><th>+/-</th></tr>
+          ${standings.map((r,i)=>`<tr class="${i<ev.settings.qualifiersPerGroup?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.pf-r.pa>0?"+":""}${r.played?r.pf-r.pa:"&mdash;"}</td></tr>`).join("")}
+        </table></div>
+      </div>`;
+    }).join("")}
+    ${ev.bracket ? `
+      <div class="card">
+        <p class="eyebrow">Knockout Bracket</p>
+        ${ev.bracket.map((round,ri)=>`
+          <p class="eyebrow" style="margin-top:14px; color:var(--court);">${roundName(ri+1, ev.bracket.length)}</p>
+          ${round.map(matchRow).join("")}
+        `).join("")}
+        ${ev.thirdPlaceMatch ? `<p class="eyebrow" style="margin-top:14px; color:var(--ball);">3rd Place Playoff</p>${matchRow(ev.thirdPlaceMatch)}` : ""}
+      </div>` : `<p class="help" style="text-align:center;">Bracket not generated yet &mdash; still in group stage.</p>`}
     ${ev.status==="complete" ? `
       <div class="card" style="background:var(--court); border-color:var(--ink); text-align:center;">
         <p class="eyebrow" style="color:var(--ball);">Champion</p>
@@ -4313,6 +4412,7 @@ function bindEvents(){
     else if(action==="typickle-set-court") typickleSetCourt();
     else if(action==="typickle-change-court") { state.typickleCourtNum=null; render(); }
     else if(action==="typickle-claim-match") typickleScoreMatch(el.dataset.match, +el.dataset.court);
+    else if(action==="typickle-view-event") await openTypickleViewer();
     else if(action==="typickle-back-to-event") await typickleBackToEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
@@ -4857,6 +4957,53 @@ async function adminSaveFairness(name){
   render();
 }
 
+async function buildTypicklePlayerHistory(name){
+  let data;
+  try{
+    const res = await sbClient.from("kv_store").select("key,value").like("key", TYPICKLE_EVENT_PREFIX+"%").limit(200);
+    data = res.data;
+    if(res.error) return [];
+  }catch(e){ return []; }
+  const events = (data||[]).map(row=>{ try{ return JSON.parse(row.value); }catch(e){ return null; } }).filter(Boolean);
+  const history = [];
+  events.forEach(ev=>{
+    const team = ev.teams.find(t=>t.players.includes(name));
+    if(!team) return;
+    const allMatches = [
+      ...ev.groups.flatMap(g=>g.matches),
+      ...(ev.bracket ? ev.bracket.flat() : []),
+      ...(ev.thirdPlaceMatch ? [ev.thirdPlaceMatch] : [])
+    ].filter(m=>m.status==="complete" && !m.isBye && m.a && m.b && (m.a.id===team.id || m.b.id===team.id));
+    if(!allMatches.length) return;
+    let wins=0, losses=0, pf=0, pa=0;
+    allMatches.forEach(m=>{
+      const isA = m.a.id===team.id;
+      pf += isA ? m.pointsForA : m.pointsForB;
+      pa += isA ? m.pointsForB : m.pointsForA;
+      if(m.winner===team.id) wins++; else losses++;
+    });
+    let stageReached = "Group Stage";
+    if(ev.bracket){
+      const finalMatch = ev.bracket[ev.bracket.length-1][0];
+      if(ev.status==="complete" && finalMatch.winner===team.id) stageReached = "\ud83c\udfc6 Champion";
+      else if(finalMatch.a && finalMatch.b && (finalMatch.a.id===team.id || finalMatch.b.id===team.id)) stageReached = "Runner-up";
+      else {
+        const semis = ev.bracket.length>=2 ? ev.bracket[ev.bracket.length-2] : [];
+        if(semis.some(m=>m.a && m.b && (m.a.id===team.id||m.b.id===team.id))) stageReached = "Semifinalist";
+        else if(ev.bracket.some(round=>round.some(m=>m.a && m.b && (m.a.id===team.id||m.b.id===team.id)))) stageReached = "Knockout Stage";
+      }
+    }
+    history.push({
+      eventName: ev.name, eventCode: ev.code, teamName: team.name,
+      partner: team.players.find(p=>p!==name),
+      played: allMatches.length, wins, losses,
+      winPct: Math.round((wins/allMatches.length)*100),
+      pointsFor: pf, pointsAgainst: pa, diff: pf-pa,
+      stageReached
+    });
+  });
+  return history;
+}
 async function openProfile(name){
   if(!name){ showToast("Enter a player name"); return; }
   if(state.route!=="profile") state.profileReturnRoute = state.route;
@@ -4865,8 +5012,10 @@ async function openProfile(name){
   const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
   const trueName = dbEntry ? dbEntry.name : name;
   const bundle = await buildPlayerStatsBundle(trueName);
+  const typickleHistory = await buildTypicklePlayerHistory(trueName);
   state.loading = false;
-  state.profile = bundle.totalMatches ? {name:trueName, dupr: dbEntry ? dbEntry.dupr : null, ...bundle} : null;
+  state.profile = (bundle.totalMatches || typickleHistory.length) ? {name:trueName, dupr: dbEntry ? dbEntry.dupr : null, ...bundle} : null;
+  state.profileTypickleHistory = typickleHistory;
   render();
 }
 async function goBackFromProfile(){
