@@ -386,6 +386,7 @@ let state = {
   leaderboardSort: { key: "wins", dir: "desc" },
   adminUser: null,
   adminSessions: null,
+  adminTypickleEvents: null,
   h2hResult: null,
   leaderboardScope: "all",
   leaderboardRowsAll: null,
@@ -421,6 +422,7 @@ let state = {
   typickleLoading: false,
   typickleCourtNum: null,
   typickleViewerEvent: null,
+  typickleMatchStats: null,
   lsTypickleRef: null
 };
 
@@ -1352,6 +1354,14 @@ async function openTypickleViewer(){
   if(!state.typickleViewerEvent) showToast("No tournament found with that code");
   render();
 }
+async function openTypickleMatchStats(matchCode, teamAName, teamBName, backRoute){
+  state.loading = true; state.route = "typickle-match-stats"; render();
+  const match = await loadLiveMatch(matchCode);
+  state.loading = false;
+  state.typickleMatchStats = match ? {match, teamAName, teamBName, backRoute} : null;
+  if(!match) showToast("Couldn't load match stats");
+  render();
+}
 function typickleSetCourt(){
   const input = document.getElementById("typickle-court-input");
   const num = parseInt(input.value.trim(), 10);
@@ -1452,6 +1462,61 @@ async function typickleBackToEvent(){
     state.route = "home";
   }
   render();
+}
+function buildLeadSwingSeries(game){
+  const series = [{point:0, scoreA:0, scoreB:0, diff:0}];
+  let scoreA=0, scoreB=0;
+  game.eventLog.filter(e=>e.type==="rally").forEach((e,i)=>{
+    if(e.rallyWinner===e.servingTeam){
+      if(e.servingTeam==="a") scoreA++; else scoreB++;
+    }
+    series.push({point:i+1, scoreA, scoreB, diff:scoreA-scoreB});
+  });
+  return series;
+}
+function computeBiggestComeback(game){
+  if(!game.winner) return 0;
+  const series = buildLeadSwingSeries(game);
+  let worstDeficit = 0;
+  series.forEach(pt=>{
+    const winnerDiff = game.winner==="a" ? pt.diff : -pt.diff;
+    if(winnerDiff < worstDeficit) worstDeficit = winnerDiff;
+  });
+  return Math.abs(worstDeficit);
+}
+function computeServerWinRates(match){
+  let aWins=0, aTotal=0, bWins=0, bTotal=0;
+  match.games.forEach(g=>{
+    g.eventLog.filter(e=>e.type==="rally").forEach(e=>{
+      if(e.servingTeam==="a"){ aTotal++; if(e.rallyWinner==="a") aWins++; }
+      else { bTotal++; if(e.rallyWinner==="b") bWins++; }
+    });
+  });
+  return {
+    a: aTotal ? Math.round((aWins/aTotal)*100) : null, aTotal,
+    b: bTotal ? Math.round((bWins/bTotal)*100) : null, bTotal
+  };
+}
+function renderMomentumChart(series, labelA, labelB){
+  if(series.length<2) return `<div class="empty">Not enough rally data yet.</div>`;
+  const w=560, h=190, padL=30, padR=14, padT=14, padB=24;
+  const diffs = series.map(p=>p.diff);
+  let yMin=Math.min(...diffs,-1), yMax=Math.max(...diffs,1);
+  const pad = Math.max(1,(yMax-yMin)*0.15); yMin-=pad; yMax+=pad;
+  const plotW=w-padL-padR, plotH=h-padT-padB;
+  const xStep = plotW/(series.length-1);
+  const yOf = v => padT + plotH - ((v-yMin)/(yMax-yMin))*plotH;
+  const coords = series.map((p,i)=>[padL+i*xStep, yOf(p.diff)]);
+  const pathD = coords.map((c,i)=>(i===0?"M":"L")+c[0].toFixed(1)+","+c[1].toFixed(1)).join(" ");
+  const zy = yOf(0);
+  return `
+  <svg viewBox="0 0 ${w} ${h}" style="width:100%; height:auto; display:block;">
+    <line x1="${padL}" y1="${zy.toFixed(1)}" x2="${w-padR}" y2="${zy.toFixed(1)}" stroke="#5B7A76" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="${w-padR}" y="${padT+10}" font-size="9" fill="#5B7A76" text-anchor="end">${labelA} ahead</text>
+    <text x="${w-padR}" y="${h-padB-4}" font-size="9" fill="#5B7A76" text-anchor="end">${labelB} ahead</text>
+    <path d="${pathD}" fill="none" stroke="#0E5C55" stroke-width="2.5"/>
+    ${coords.map((c,i)=>`<g><title>Rally ${series[i].point}: ${series[i].scoreA}-${series[i].scoreB}</title><circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="8" fill="transparent"/></g>`).join("")}
+  </svg>`;
 }
 function typickleAddPlayer(){
   const nameEl = document.getElementById("typickle-player-name");
@@ -2545,6 +2610,7 @@ function render(){
   else if(state.route==="typickle-event") view.innerHTML = renderTypickleEvent();
   else if(state.route==="typickle-court") view.innerHTML = renderTypickleCourtQueue();
   else if(state.route==="typickle-viewer") view.innerHTML = renderTypickleViewer();
+  else if(state.route==="typickle-match-stats") view.innerHTML = renderTypickleMatchStats();
   bindEvents();
 }
 
@@ -3360,6 +3426,7 @@ function renderTypickleEvent(){
       <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${m.b && !m.b.bye ? teamName(m.b.id) : (m.b?"Bye":"TBD")}</div>
       ${m.status==="scheduled" ? `<button class="btn btn-ink btn-sm" data-action="typickle-score-match" data-match="${m.id}">Score this match</button>` : ""}
       ${m.status==="live" ? `<button class="btn btn-outline btn-sm" data-action="typickle-resume-match" data-code="${m.matchCode}">Resume</button>` : ""}
+      ${m.status==="complete" && m.matchCode ? `<button class="btn btn-outline btn-sm" data-action="typickle-view-stats" data-code="${m.matchCode}" data-teama="${m.a&&!m.a.bye?teamName(m.a.id):""}" data-teamb="${m.b&&!m.b.bye?teamName(m.b.id):""}" data-back="event">View Stats</button>` : ""}
     </div>`;
   const allGroupsComplete = ev.groups.every(g=>g.matches.every(m=>m.status==="complete"));
   const roundName = (round, totalRounds) => {
@@ -3412,6 +3479,40 @@ function renderTypickleEvent(){
         <h2 style="color:#fff;">${teamName(ev.bracket[ev.bracket.length-1][0].winner)}</h2>
       </div>` : ""}`;
 }
+function renderTypickleMatchStats(){
+  if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading match stats\u2026</div>`;
+  const data = state.typickleMatchStats;
+  if(!data) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Stats not available</h2></div>`;
+  const { match, teamAName, teamBName } = data;
+  const serveRates = computeServerWinRates(match);
+  return `
+    <button class="back-link" data-action="typickle-back-from-stats">&larr; Back</button>
+    <div class="card" style="background:var(--court); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Match Momentum</p>
+      <h2 style="color:#fff;">${teamAName} vs ${teamBName}</h2>
+      <p class="sub" style="color:#DCEDEA;">Final: ${match.gamesWonA}-${match.gamesWonB}</p>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Serve win rate</p>
+      <p class="sub" style="margin-top:0;">How often each team won the rally specifically while serving.</p>
+      <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);">
+        <div class="stat-tile"><div class="num">${serveRates.a!=null?serveRates.a+"%":"&mdash;"}</div><div class="lbl">${teamAName} (${serveRates.aTotal} serves)</div></div>
+        <div class="stat-tile"><div class="num">${serveRates.b!=null?serveRates.b+"%":"&mdash;"}</div><div class="lbl">${teamBName} (${serveRates.bTotal} serves)</div></div>
+      </div>
+    </div>
+    ${match.games.map((g,i)=>{
+      const series = buildLeadSwingSeries(g);
+      const comeback = computeBiggestComeback(g);
+      const winnerName = g.winner==="a" ? teamAName : teamBName;
+      return `
+      <div class="card">
+        <p class="eyebrow">Game ${i+1}</p>
+        <h2 style="margin-bottom:2px;">${g.scoreA}-${g.scoreB}</h2>
+        <p class="sub">${winnerName} won &middot; ${comeback>0 ? `biggest deficit overcome: ${comeback} point${comeback===1?"":"s"}` : "led wire-to-wire, no deficit to overcome"}</p>
+        ${renderMomentumChart(series, teamAName, teamBName)}
+      </div>`;
+    }).join("")}`;
+}
 function renderTypickleViewer(){
   if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading tournament\u2026</div>`;
   const ev = state.typickleViewerEvent;
@@ -3422,6 +3523,7 @@ function renderTypickleViewer(){
       <div class="side ${m.status==="complete"&&m.winner===m.a.id?"win":""}">${m.a && !m.a.bye ? teamName(m.a.id) : (m.a?"Bye":"TBD")}</div>
       <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? `${m.gamesWonA}-${m.gamesWonB}` : m.status==="live" ? "LIVE" : "&mdash;"}</div>
       <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${m.b && !m.b.bye ? teamName(m.b.id) : (m.b?"Bye":"TBD")}</div>
+      ${m.status==="complete" && m.matchCode ? `<button class="btn btn-outline btn-sm" data-action="typickle-view-stats" data-code="${m.matchCode}" data-teama="${m.a&&!m.a.bye?teamName(m.a.id):""}" data-teamb="${m.b&&!m.b.bye?teamName(m.b.id):""}" data-back="viewer">View Stats</button>` : ""}
     </div>`;
   const roundName = (round, totalRounds) => {
     const fromEnd = totalRounds - round;
@@ -3952,6 +4054,18 @@ function renderAdminDashboard(){
       <button class="btn btn-ink btn-sm" data-action="run-prediction-report">${state.predictionReportRun ? "Refresh report" : "Run report"}</button>
       ${state.predictionReportRun ? renderPredictionReportBody(state.predictionReport) : ""}
     </div>
+    <div class="card" style="border-color:var(--court);">
+      <p class="eyebrow">Typickle tournaments (${state.adminTypickleEvents?state.adminTypickleEvents.length:0})</p>
+      <p class="sub" style="margin-top:0;">Separate from regular sessions above &mdash; deleting one also deletes every match played inside it.</p>
+      ${!state.adminTypickleEvents || !state.adminTypickleEvents.length ? `<p class="help">No Typickle tournaments found.</p>` : state.adminTypickleEvents.map(ev=>`
+        <div class="match-card">
+          <div style="flex:2; min-width:180px;">
+            <div style="font-weight:800;">${ev.name}</div>
+            <div class="help" style="margin:2px 0 0;">Code ${ev.code} &middot; ${ev.teamCount} teams &middot; ${ev.status}</div>
+          </div>
+          <button class="remove-btn" data-action="admin-delete-typickle-event" data-key="${ev.key}">Delete</button>
+        </div>`).join("")}
+    </div>
     <div class="card">
       <p class="eyebrow">All sessions (${sessions?sessions.length:0})</p>
       ${!sessions || !sessions.length ? `<p class="help">No sessions found.</p>` : sessions.map(s=>`
@@ -4413,6 +4527,8 @@ function bindEvents(){
     else if(action==="typickle-change-court") { state.typickleCourtNum=null; render(); }
     else if(action==="typickle-claim-match") typickleScoreMatch(el.dataset.match, +el.dataset.court);
     else if(action==="typickle-view-event") await openTypickleViewer();
+    else if(action==="typickle-view-stats") await openTypickleMatchStats(el.dataset.code, el.dataset.teama, el.dataset.teamb, el.dataset.back);
+    else if(action==="typickle-back-from-stats") { state.route = state.typickleMatchStats && state.typickleMatchStats.backRoute==="viewer" ? "typickle-viewer" : "typickle-event"; state.typickleMatchStats = null; render(); }
     else if(action==="typickle-back-to-event") await typickleBackToEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
     else if(action==="ls-go-position") lsGoToPositioning();
@@ -4451,6 +4567,7 @@ function bindEvents(){
     else if(action==="admin-login") await adminLoginHandler();
     else if(action==="admin-logout") await adminLogoutHandler();
     else if(action==="admin-delete-session") await adminDeleteSession(el.dataset.key);
+    else if(action==="admin-delete-typickle-event") await adminDeleteTypickleEvent(el.dataset.key);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
@@ -4715,6 +4832,7 @@ async function openAdmin(){
   if(state.adminUser){
     state.playerLists = await loadPlayerLists();
     await loadAdminSessions();
+    await loadAdminTypickleEvents();
   } else {
     render();
   }
@@ -4842,6 +4960,43 @@ async function adminDeleteSession(key){
     haptic("strong");
     showToast("Session deleted");
     await loadAdminSessions();
+  }catch(e){
+    showToast("Delete failed");
+  }
+}
+async function loadAdminTypickleEvents(){
+  try{
+    const { data, error } = await sbClient.from("kv_store").select("key,value,updated_at").like("key", TYPICKLE_EVENT_PREFIX+"%").order("updated_at",{ascending:false}).limit(100);
+    if(error) throw error;
+    state.adminTypickleEvents = (data||[]).map(row=>{
+      let ev=null; try{ ev = JSON.parse(row.value); }catch(e){}
+      return { key: row.key, updatedAt: row.updated_at, code: ev?ev.code:row.key.replace(TYPICKLE_EVENT_PREFIX,""), name: ev?ev.name:"(unreadable)", teamCount: ev?ev.teams.length:0, status: ev?ev.status:"?" };
+    });
+  }catch(e){
+    console.error("loadAdminTypickleEvents failed", e);
+    state.adminTypickleEvents = [];
+  }
+}
+async function adminDeleteTypickleEvent(key){
+  if(!confirm("Delete this tournament permanently, including every match played in it? This can't be undone.")) return;
+  try{
+    const ev = await loadTypickleEvent(key.replace(TYPICKLE_EVENT_PREFIX,""));
+    if(ev){
+      const codes = [
+        ...ev.groups.flatMap(g=>g.matches.map(m=>m.matchCode)),
+        ...(ev.bracket ? ev.bracket.flatMap(r=>r.map(m=>m.matchCode)) : []),
+        ...(ev.thirdPlaceMatch ? [ev.thirdPlaceMatch.matchCode] : [])
+      ].filter(Boolean);
+      for(const code of codes){
+        await sbClient.from("kv_store").delete().eq("key", "typickle-match-"+code);
+      }
+    }
+    const { error } = await sbClient.from("kv_store").delete().eq("key", key);
+    if(error){ showToast("Delete failed: "+error.message); return; }
+    haptic("strong");
+    showToast("Tournament and all its matches deleted");
+    await loadAdminTypickleEvents();
+    render();
   }catch(e){
     showToast("Delete failed");
   }
