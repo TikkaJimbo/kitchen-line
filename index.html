@@ -387,6 +387,7 @@ let state = {
   adminUser: null,
   adminSessions: null,
   adminTypickleEvents: null,
+  currentRefereeCode: null,
   h2hResult: null,
   leaderboardScope: "all",
   leaderboardRowsAll: null,
@@ -4017,8 +4018,13 @@ function renderAdminDashboard(){
     <div class="card" style="border-color:var(--court);">
       <p class="eyebrow">Typickle referee access code</p>
       <p class="sub" style="margin-top:0;">A single shared code so any court's device can score matches, without needing individual referee logins. Anyone with this code can enter scores &mdash; keep it to people running a court.</p>
+      ${state.currentRefereeCode ? `
+        <div style="background:var(--kitchen); border:2px solid var(--ink); border-radius:12px; padding:14px; margin-bottom:14px; text-align:center;">
+          <p class="eyebrow" style="color:var(--ball); margin-bottom:4px;">Currently active</p>
+          <p style="font-family:'Oswald',sans-serif; font-weight:600; font-size:24px; letter-spacing:0.08em; color:#fff; margin:0;">${state.currentRefereeCode}</p>
+        </div>` : `<p class="help">No code set yet &mdash; referees can't score matches until you set one below.</p>`}
       <div class="player-add-row">
-        <div class="field"><label>Code</label><input type="text" id="referee-code-admin-input" placeholder="e.g. TYPICKLE2026"></div>
+        <div class="field"><label>${state.currentRefereeCode ? "Change code" : "Code"}</label><input type="text" id="referee-code-admin-input" placeholder="e.g. TYPICKLE2026"></div>
         <button class="btn btn-ink btn-sm" data-action="admin-save-referee-code" style="height:44px;">Save</button>
       </div>
     </div>
@@ -4874,6 +4880,7 @@ async function openAdmin(){
     state.playerLists = await loadPlayerLists();
     await loadAdminSessions();
     await loadAdminTypickleEvents();
+    try{ state.currentRefereeCode = await storeGet(REFEREE_CODE_KEY, true); }catch(e){ state.currentRefereeCode = null; }
   } else {
     render();
   }
@@ -5088,8 +5095,9 @@ async function adminSaveRefereeCode(){
   const code = input.value.trim();
   if(!code){ showToast("Enter a code"); return; }
   await storeSet(REFEREE_CODE_KEY, code, true);
+  state.currentRefereeCode = code;
   showToast("Referee code saved");
-  input.value = "";
+  render();
 }
 function adminAddToListBuilder(){
   const nameEl = document.getElementById("list-player-name");
