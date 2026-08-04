@@ -1608,6 +1608,7 @@ async function createTypickleEvent(){
     showToast("\u26a0\ufe0f Couldn't save the event \u2014 check your connection and try again");
     return;
   }
+  try{ localStorage.setItem("typickle-current-event", code); }catch(e){}
   state.typickleEvent = event;
   state.typickleEventCode = code;
   state.route = "typickle-event";
@@ -1641,6 +1642,24 @@ function lsGoToPositioning(){
   state.lsPlacements = { topLeft:null, bottomLeft:null, topRight:null, bottomRight:null };
   state.lsSelectedChip = null;
   state.lsStep = "position";
+  render();
+}
+async function goTypickleHome(){
+  let existingCode = null;
+  try{ existingCode = localStorage.getItem("typickle-current-event"); }catch(e){}
+  if(existingCode){
+    state.typickleLoading = true; state.route = "typickle-event"; render();
+    const ev = await loadTypickleEvent(existingCode);
+    state.typickleLoading = false;
+    if(ev){
+      state.typickleEvent = ev;
+      state.typickleEventCode = existingCode;
+      render();
+      return;
+    }
+    try{ localStorage.removeItem("typickle-current-event"); }catch(e){}
+  }
+  state.route = "typickle-setup";
   render();
 }
 async function openLiveScoring(){
@@ -3449,6 +3468,7 @@ function renderTypickleEvent(){
       <h2 style="color:#fff;">${ev.name}</h2>
       <p class="sub" style="color:#DCEDEA;">Event Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${ev.code}</b></p>
       <button class="btn btn-outline btn-sm" data-action="go-typickle-court" style="border-color:#fff; color:#fff; margin-top:8px;">View by Court</button>
+      <button class="btn btn-outline btn-sm" data-action="typickle-start-new" style="border-color:#fff; color:#fff; margin-top:8px;">Start a New Tournament</button>
     </div>
     ${ev.groups.map(g=>{
       const standings = computeGroupStandings(g, ev.teams);
@@ -4518,7 +4538,7 @@ function bindEvents(){
     else if(action==="go-sessions") await openSessionViewer();
     else if(action==="go-partnerships") openPartnerships();
     else if(action==="go-livescore") await openLiveScoring();
-    else if(action==="go-typickle-setup") { state.route="typickle-setup"; render(); }
+    else if(action==="go-typickle-setup") await goTypickleHome();
     else if(action==="typickle-add-player") typickleAddPlayer();
     else if(action==="typickle-remove-player") typickleRemovePlayer(+el.dataset.idx);
     else if(action==="typickle-pick-pair") handleTypicklePairPick(el.dataset.name);
@@ -4529,6 +4549,14 @@ function bindEvents(){
     else if(action==="typickle-resume-match") await typickleResumeMatch(el.dataset.code);
     else if(action==="typickle-confirm-lock") await confirmAndLockGroups();
     else if(action==="go-typickle-court") { state.route="typickle-court"; render(); }
+    else if(action==="typickle-start-new") {
+      if(confirm("Start a new tournament? This one stays saved and viewable by code \u2014 it just won't be the one you jump back into from the home screen.")){
+        try{ localStorage.removeItem("typickle-current-event"); }catch(e){}
+        state.typickleEvent = null; state.typickleEventCode = null;
+        state.typickleSetup = { eventName:"Typickle Tournament 1.0", players:[], teams:[], pairSelection:null, groupCount:4, qualifiersPerGroup:1, hasThirdPlacePlayoff:true };
+        state.route = "typickle-setup"; render();
+      }
+    }
     else if(action==="typickle-set-court") typickleSetCourt();
     else if(action==="typickle-change-court") { state.typickleCourtNum=null; render(); }
     else if(action==="typickle-claim-match") typickleScoreMatch(el.dataset.match, +el.dataset.court);
