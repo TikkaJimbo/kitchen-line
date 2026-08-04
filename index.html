@@ -468,11 +468,11 @@ async function loadTypickleEvent(code){
   if(!raw) return null;
   try{ return JSON.parse(raw); }catch(e){ return null; }
 }
-function generateGroupMatches(teams){
+function generateGroupMatches(teams, groupId){
   const participants = teams.map(t=>({id:t.id, label:t.name}));
   const raw = generateRoundRobin(participants);
   return raw.filter(m=>!m.isBye).map(m=>({
-    id:m.id, round:m.round, a:m.a, b:m.b,
+    id:groupId+"-"+m.id, round:m.round, a:m.a, b:m.b,
     matchCode:null, status:"scheduled", court:null,
     gamesWonA:null, gamesWonB:null, winner:null,
     pointsForA:null, pointsForB:null
@@ -514,11 +514,14 @@ function makeTypickleGroups(teams, groupCount){
     if(dir===1){ if(g===groupCount-1) dir=-1; else g++; }
     else { if(g===0) dir=1; else g--; }
   });
-  return groups.map((gTeams,i)=>({
-    id:"G"+(i+1), label:"Group "+String.fromCharCode(65+i),
-    teamIds: gTeams.map(t=>t.id),
-    matches: generateGroupMatches(gTeams)
-  }));
+  return groups.map((gTeams,i)=>{
+    const groupId = "G"+(i+1);
+    return {
+      id: groupId, label:"Group "+String.fromCharCode(65+i),
+      teamIds: gTeams.map(t=>t.id),
+      matches: generateGroupMatches(gTeams, groupId)
+    };
+  });
 }
 async function codeTaken(code){
   const v = await storeGet("tourney-"+code, true);
@@ -4083,12 +4086,14 @@ function renderAdminDashboard(){
     <div class="card" style="border-color:var(--court);">
       <p class="eyebrow">Typickle tournaments (${state.adminTypickleEvents?state.adminTypickleEvents.length:0})</p>
       <p class="sub" style="margin-top:0;">Separate from regular sessions above &mdash; deleting one also deletes every match played inside it.</p>
+      <button class="btn btn-outline btn-sm" data-action="admin-refresh-typickle-events" style="margin-bottom:10px;">Refresh list</button>
       ${!state.adminTypickleEvents || !state.adminTypickleEvents.length ? `<p class="help">No Typickle tournaments found.</p>` : state.adminTypickleEvents.map(ev=>`
         <div class="match-card">
           <div style="flex:2; min-width:180px;">
             <div style="font-weight:800;">${ev.name}</div>
             <div class="help" style="margin:2px 0 0;">Code ${ev.code} &middot; ${ev.teamCount} teams &middot; ${ev.status}</div>
           </div>
+          <button class="btn btn-ink btn-sm" data-action="admin-open-typickle-event" data-code="${ev.code}">Open</button>
           <button class="remove-btn" data-action="admin-delete-typickle-event" data-key="${ev.key}">Delete</button>
         </div>`).join("")}
     </div>
@@ -4602,6 +4607,8 @@ function bindEvents(){
     else if(action==="admin-logout") await adminLogoutHandler();
     else if(action==="admin-delete-session") await adminDeleteSession(el.dataset.key);
     else if(action==="admin-delete-typickle-event") await adminDeleteTypickleEvent(el.dataset.key);
+    else if(action==="admin-refresh-typickle-events") { await loadAdminTypickleEvents(); render(); }
+    else if(action==="admin-open-typickle-event") await adminOpenTypickleEvent(el.dataset.code);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
@@ -5010,6 +5017,16 @@ async function loadAdminTypickleEvents(){
     console.error("loadAdminTypickleEvents failed", e);
     state.adminTypickleEvents = [];
   }
+}
+async function adminOpenTypickleEvent(code){
+  state.typickleLoading = true; state.route = "typickle-event"; render();
+  const ev = await loadTypickleEvent(code);
+  state.typickleLoading = false;
+  if(!ev){ showToast("Couldn't load that tournament"); render(); return; }
+  state.typickleEvent = ev;
+  state.typickleEventCode = code;
+  try{ localStorage.setItem("typickle-current-event", code); }catch(e){}
+  render();
 }
 async function adminDeleteTypickleEvent(key){
   if(!confirm("Delete this tournament permanently, including every match played in it? This can't be undone.")) return;
