@@ -1319,6 +1319,43 @@ function makeTypickleBracket(pairs, teams){
   rounds.forEach(round=>round.forEach(m=>{ if(m.a && m.b && m.status==="pending") m.status="scheduled"; }));
   return rounds;
 }
+function computeOverallTeamStats(ev){
+  const allMatches = [
+    ...ev.groups.flatMap(g=>g.matches),
+    ...(ev.bracket ? ev.bracket.flat() : []),
+    ...(ev.thirdPlaceMatch ? [ev.thirdPlaceMatch] : [])
+  ].filter(m=>m.status==="complete" && !m.isBye && m.a && m.b);
+  const stats = {};
+  ev.teams.forEach(t=>{ stats[t.id] = { id:t.id, name:t.name, dupr:t.seedDupr, played:0, won:0, lost:0, pf:0, pa:0 }; });
+  allMatches.forEach(m=>{
+    const rowA = stats[m.a.id], rowB = stats[m.b.id];
+    if(!rowA || !rowB) return;
+    rowA.played++; rowB.played++;
+    rowA.pf += m.pointsForA; rowA.pa += m.pointsForB;
+    rowB.pf += m.pointsForB; rowB.pa += m.pointsForA;
+    if(m.winner===m.a.id){ rowA.won++; rowB.lost++; } else { rowB.won++; rowA.lost++; }
+  });
+  return Object.values(stats).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
+}
+function renderTypickleTeamStats(ev){
+  const stats = computeOverallTeamStats(ev);
+  return `
+    <div class="card">
+      <p class="eyebrow">Team Stats</p>
+      <div class="table-scroll"><table>
+        <tr><th>Team</th><th>DUPR</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th></tr>
+        ${stats.map(r=>`
+          <tr>
+            <td>${r.name}</td>
+            <td>${r.dupr!=null ? r.dupr.toFixed(2) : "&mdash;"}</td>
+            <td>${r.played}</td>
+            <td>${r.won}-${r.lost}</td>
+            <td>${r.played ? Math.round((r.won/r.played)*100)+"%" : "&mdash;"}</td>
+            <td>${r.played ? (r.pf-r.pa>0?"+":"")+(r.pf-r.pa) : "&mdash;"}</td>
+          </tr>`).join("")}
+      </table></div>
+    </div>`;
+}
 function typickleRoundName(round, totalRounds){
   const fromEnd = totalRounds - round;
   if(fromEnd===0) return "Final";
@@ -3531,6 +3568,7 @@ function renderTypickleEvent(){
       <button class="btn btn-outline btn-sm" data-action="go-typickle-court" style="border-color:#fff; color:#fff; margin-top:8px;">View by Court</button>
       <button class="btn btn-outline btn-sm" data-action="typickle-start-new" style="border-color:#fff; color:#fff; margin-top:8px;">Start a New Tournament</button>
     </div>
+    ${renderTypickleTeamStats(ev)}
     ${ev.groups.map(g=>{
       const standings = computeGroupStandings(g, ev.teams);
       return `
@@ -3620,6 +3658,7 @@ function renderTypickleViewer(){
       <p class="eyebrow" style="color:var(--ball);">Live Tournament &mdash; Viewer</p>
       <h2 style="color:#fff;">${ev.name}</h2>
     </div>
+    ${renderTypickleTeamStats(ev)}
     ${ev.groups.map(g=>{
       const standings = computeGroupStandings(g, ev.teams);
       return `
@@ -3672,6 +3711,7 @@ function renderTypickleCourtQueue(){
   const playable = m => m.a && m.b && !m.a.bye && !m.b.bye;
   const live = allMatches.find(m=>m.court===courtNum && m.status==="live");
   const queued = allMatches.filter(m=> playable(m) && m.status==="scheduled" && (m.court===courtNum || m.court==null));
+  const recentlyDone = allMatches.filter(m=> playable(m) && m.status==="complete" && m.court===courtNum);
   return `
     <button class="back-link" data-action="typickle-change-court">&larr; Change court</button>
     <div class="card" style="background:var(--court); border-color:var(--ink);">
@@ -3699,7 +3739,18 @@ function renderTypickleCourtQueue(){
           <div class="side" style="text-align:right;">${teamName(m.b.id)}</div>
           <button class="btn btn-ink btn-sm" data-action="typickle-claim-match" data-match="${m.id}" data-court="${courtNum}">Score this match</button>
         </div>`).join("") : `<p class="help">No matches waiting for this court yet.</p>`}
-    </div>`;
+    </div>
+    ${recentlyDone.length ? `
+    <div class="card">
+      <p class="eyebrow">Recently completed on this court</p>
+      ${recentlyDone.slice(-3).reverse().map(m=>`
+        <div class="match-card">
+          <span class="court-tag">${typickleMatchLabel(ev, m.id)}</span>
+          <div class="side ${m.winner===m.a.id?"win":""}">${teamName(m.a.id)}</div>
+          <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">${m.gamesWonA}-${m.gamesWonB}</div>
+          <div class="side ${m.winner===m.b.id?"win":""}" style="text-align:right;">${teamName(m.b.id)}</div>
+        </div>`).join("")}
+    </div>` : ""}`;
 }
 function renderLiveScoreSetup(){
   const f = state.lsSetup;
