@@ -424,6 +424,8 @@ let state = {
   typickleCourtNum: null,
   typickleViewerEvent: null,
   typickleMatchStats: null,
+  typickleForfeitMenuFor: null,
+  typickleEditingMatch: null,
   lsTypickleRef: null
 };
 
@@ -1434,6 +1436,71 @@ async function openTypickleMatchStats(matchCode, teamAName, teamBName, backRoute
   if(!match) showToast("Couldn't load match stats");
   render();
 }
+async function typickleSaveEditResult(matchId){
+  const ev = state.typickleEvent;
+  const found = typickleFindMatch(ev, matchId);
+  if(!found) return;
+  const guard = typickleCanEditBracketMatch(ev, found);
+  if(!guard.ok){ showToast(guard.reason); return; }
+  const gamesWonA = +document.getElementById("edit-gamesA-"+matchId).value;
+  const gamesWonB = +document.getElementById("edit-gamesB-"+matchId).value;
+  const pointsForA = +document.getElementById("edit-pointsA-"+matchId).value;
+  const pointsForB = +document.getElementById("edit-pointsB-"+matchId).value;
+  if(gamesWonA===gamesWonB){ showToast("Games won can't be tied \u2014 there must be a winner"); return; }
+  const m = found.match;
+  m.gamesWonA = gamesWonA; m.gamesWonB = gamesWonB;
+  m.pointsForA = pointsForA; m.pointsForB = pointsForB;
+  m.winner = gamesWonA>gamesWonB ? m.a.id : m.b.id;
+  m.forfeit = false;
+  typickleApplyBracketConsequences(ev, found);
+  try{
+    await saveTypickleEvent(ev.code, ev);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save the correction \u2014 check your connection");
+    return;
+  }
+  state.typickleEditingMatch = null;
+  haptic("medium");
+  showToast("Result corrected");
+  render();
+}
+function typickleCanEditBracketMatch(ev, found){
+  if(found.location!=="bracket") return {ok:true};
+  const roundIdx = ev.bracket.findIndex(r=>r.includes(found.match));
+  if(roundIdx>=0 && roundIdx < ev.bracket.length-1){
+    const matchIdxInRound = ev.bracket[roundIdx].indexOf(found.match);
+    const nextMatch = ev.bracket[roundIdx+1][Math.floor(matchIdxInRound/2)];
+    if(nextMatch && nextMatch.status && nextMatch.status!=="scheduled" && nextMatch.status!=="pending"){
+      return {ok:false, reason:`${typickleMatchLabel(ev,nextMatch.id)} has already started or finished \u2014 fix that match first.`};
+    }
+  }
+  return {ok:true};
+}
+async function typickleForfeitMatch(matchId, winnerSide){
+  const ev = state.typickleEvent;
+  const found = typickleFindMatch(ev, matchId);
+  if(!found) return;
+  const m = found.match;
+  const winnerLabel = winnerSide==="a" ? ev.teams.find(t=>t.id===m.a.id).name : ev.teams.find(t=>t.id===m.b.id).name;
+  if(!confirm(`Mark this as a forfeit win for ${winnerLabel}? The other team gets a loss recorded, no score.`)) return;
+  m.status = "complete";
+  m.forfeit = true;
+  m.winner = winnerSide==="a" ? m.a.id : m.b.id;
+  m.gamesWonA = winnerSide==="a" ? 1 : 0;
+  m.gamesWonB = winnerSide==="b" ? 1 : 0;
+  m.pointsForA = 0; m.pointsForB = 0;
+  m.matchCode = null;
+  typickleApplyBracketConsequences(ev, found);
+  try{
+    await saveTypickleEvent(ev.code, ev);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save the forfeit \u2014 check your connection");
+    return;
+  }
+  haptic("medium");
+  showToast("Forfeit recorded");
+  render();
+}
 function typickleSetCourt(){
   const input = document.getElementById("typickle-court-input");
   const num = parseInt(input.value.trim(), 10);
@@ -1473,6 +1540,22 @@ async function typickleResumeMatch(matchCode){
   render();
   syncTypickleResult();
 }
+function typickleApplyBracketConsequences(ev, found){
+  if(found.location!=="bracket") return;
+  propagateBracket(ev.bracket);
+  ev.bracket.forEach(round=>round.forEach(m=>{ if(m.a && m.b && m.status==="pending") m.status="scheduled"; }));
+  if(ev.settings.hasThirdPlacePlayoff && ev.bracket.length>=2){
+    const semis = ev.bracket[ev.bracket.length-2];
+    if(semis.length===2 && semis.every(m=>m.status==="complete") && !ev.thirdPlaceMatch){
+      const loserOf = m => m.winner===m.a.id ? m.b : m.a;
+      const l1 = loserOf(semis[0]), l2 = loserOf(semis[1]);
+      if(!l1.bye && !l2.bye){
+        ev.thirdPlaceMatch = { id:"tko-3rd", round:0, a:l1, b:l2, matchCode:null, status:"scheduled", court:null, gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null, forfeit:false };
+      }
+    }
+  }
+  if(ev.bracket[ev.bracket.length-1].every(m=>m.status==="complete")) ev.status = "complete";
+}
 async function syncTypickleResult(){
   const match = state.lsMatch;
   if(!match || !match.matchOver || !match.typickleRef || match.typickleResultSynced) return;
@@ -1491,22 +1574,7 @@ async function syncTypickleResult(){
     gm.pointsForA = pointsForA; gm.pointsForB = pointsForB;
     gm.matchCode = state.lsMatchCode;
 
-    if(found.location==="bracket"){
-      propagateBracket(ev.bracket);
-      ev.bracket.forEach(round=>round.forEach(m=>{ if(m.a && m.b && m.status==="pending") m.status="scheduled"; }));
-      // once both semifinal losers are known, populate the 3rd place match
-      if(ev.settings.hasThirdPlacePlayoff && ev.bracket.length>=2){
-        const semis = ev.bracket[ev.bracket.length-2];
-        if(semis.length===2 && semis.every(m=>m.status==="complete") && !ev.thirdPlaceMatch){
-          const loserOf = m => m.winner===m.a.id ? m.b : m.a;
-          const l1 = loserOf(semis[0]), l2 = loserOf(semis[1]);
-          if(!l1.bye && !l2.bye){
-            ev.thirdPlaceMatch = { id:"tko-3rd", round:0, a:l1, b:l2, matchCode:null, status:"scheduled", court:null, gamesWonA:null, gamesWonB:null, winner:null, isBye:false, pointsForA:null, pointsForB:null };
-          }
-        }
-      }
-      if(ev.bracket[ev.bracket.length-1].every(m=>m.status==="complete")) ev.status = "complete";
-    }
+    typickleApplyBracketConsequences(ev, found);
 
     await saveTypickleEvent(ref.eventCode, ev);
     match.typickleResultSynced = true;
@@ -3551,13 +3619,37 @@ function renderTypickleEvent(){
     <div class="match-card">
       <span class="court-tag">${typickleMatchLabel(ev, m.id)}</span>
       ${m.court ? `<span class="court-tag" style="background:var(--court); color:#fff;">Court ${m.court}</span>` : ""}
+      ${m.forfeit ? `<span class="court-tag" style="background:#B0413E; color:#fff;">Forfeit</span>` : ""}
       <div class="side ${m.status==="complete"&&m.winner===m.a.id?"win":""}">${m.a && !m.a.bye ? teamName(m.a.id) : (m.a?"Bye":"TBD")}</div>
-      <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? `${m.gamesWonA}-${m.gamesWonB}` : m.status==="live" ? "LIVE" : "&mdash;"}</div>
+      <div class="side" style="text-align:center; flex:0; min-width:70px; font-weight:800;">${m.status==="complete" ? (m.forfeit ? "W/O" : `${m.gamesWonA}-${m.gamesWonB}`) : m.status==="live" ? "LIVE" : "&mdash;"}</div>
       <div class="side ${m.status==="complete"&&m.winner===m.b.id?"win":""}" style="text-align:right;">${m.b && !m.b.bye ? teamName(m.b.id) : (m.b?"Bye":"TBD")}</div>
-      ${m.status==="scheduled" ? `<button class="btn btn-ink btn-sm" data-action="typickle-score-match" data-match="${m.id}">Score this match</button>` : ""}
+      ${m.status==="scheduled" ? `
+        <button class="btn btn-ink btn-sm" data-action="typickle-score-match" data-match="${m.id}">Score this match</button>
+        <button class="btn btn-outline btn-sm" data-action="typickle-forfeit-menu" data-match="${m.id}">Forfeit</button>
+      ` : ""}
       ${m.status==="live" ? `<button class="btn btn-outline btn-sm" data-action="typickle-resume-match" data-code="${m.matchCode}">Resume</button>` : ""}
       ${m.status==="complete" && m.matchCode ? `<button class="btn btn-outline btn-sm" data-action="typickle-view-stats" data-code="${m.matchCode}" data-teama="${m.a&&!m.a.bye?teamName(m.a.id):""}" data-teamb="${m.b&&!m.b.bye?teamName(m.b.id):""}" data-back="event">View Stats</button>` : ""}
-    </div>`;
+      ${m.status==="complete" && state.adminUser ? `<button class="btn btn-outline btn-sm" data-action="typickle-edit-result" data-match="${m.id}">Edit Result</button>` : ""}
+    </div>
+    ${state.typickleForfeitMenuFor===m.id ? `
+      <div class="match-card" style="background:var(--kitchen);">
+        <p class="sub" style="color:#DCEDEA; margin:0 0 8px;">Who won by forfeit?</p>
+        <button class="btn btn-ink btn-sm" data-action="typickle-do-forfeit" data-match="${m.id}" data-side="a">${m.a && !m.a.bye ? teamName(m.a.id) : "Side A"}</button>
+        <button class="btn btn-ink btn-sm" data-action="typickle-do-forfeit" data-match="${m.id}" data-side="b">${m.b && !m.b.bye ? teamName(m.b.id) : "Side B"}</button>
+        <button class="btn btn-outline btn-sm" data-action="typickle-cancel-forfeit">Cancel</button>
+      </div>` : ""}
+    ${state.typickleEditingMatch===m.id ? `
+      <div class="match-card" style="background:var(--kitchen); flex-wrap:wrap;">
+        <p class="sub" style="color:#DCEDEA; margin:0 0 8px; flex:1 1 100%;">Correcting ${typickleMatchLabel(ev,m.id)}</p>
+        <div class="field" style="min-width:100px;"><label style="color:#DCEDEA;">${teamName(m.a.id)} games</label><input type="number" min="0" id="edit-gamesA-${m.id}" value="${m.gamesWonA||0}"></div>
+        <div class="field" style="min-width:100px;"><label style="color:#DCEDEA;">${teamName(m.b.id)} games</label><input type="number" min="0" id="edit-gamesB-${m.id}" value="${m.gamesWonB||0}"></div>
+        <div class="field" style="min-width:100px;"><label style="color:#DCEDEA;">${teamName(m.a.id)} pts</label><input type="number" min="0" id="edit-pointsA-${m.id}" value="${m.pointsForA||0}"></div>
+        <div class="field" style="min-width:100px;"><label style="color:#DCEDEA;">${teamName(m.b.id)} pts</label><input type="number" min="0" id="edit-pointsB-${m.id}" value="${m.pointsForB||0}"></div>
+        <div style="flex:1 1 100%; display:flex; gap:8px; margin-top:6px;">
+          <button class="btn btn-ink btn-sm" data-action="typickle-save-edit" data-match="${m.id}">Save Correction</button>
+          <button class="btn btn-outline btn-sm" data-action="typickle-cancel-edit" style="border-color:#fff; color:#fff;">Cancel</button>
+        </div>
+      </div>` : ""}`;
   const allGroupsComplete = ev.groups.every(g=>g.matches.every(m=>m.status==="complete"));
   return `
     <button class="back-link" data-action="go-home">&larr; Back to Home</button>
@@ -4679,6 +4771,12 @@ function bindEvents(){
     else if(action==="typickle-claim-match") typickleScoreMatch(el.dataset.match, +el.dataset.court);
     else if(action==="typickle-view-event") await openTypickleViewer();
     else if(action==="typickle-view-stats") await openTypickleMatchStats(el.dataset.code, el.dataset.teama, el.dataset.teamb, el.dataset.back);
+    else if(action==="typickle-forfeit-menu") { state.typickleForfeitMenuFor = el.dataset.match; render(); }
+    else if(action==="typickle-cancel-forfeit") { state.typickleForfeitMenuFor = null; render(); }
+    else if(action==="typickle-do-forfeit") { state.typickleForfeitMenuFor = null; await typickleForfeitMatch(el.dataset.match, el.dataset.side); }
+    else if(action==="typickle-edit-result") { state.typickleEditingMatch = el.dataset.match; render(); }
+    else if(action==="typickle-cancel-edit") { state.typickleEditingMatch = null; render(); }
+    else if(action==="typickle-save-edit") await typickleSaveEditResult(el.dataset.match);
     else if(action==="typickle-back-from-stats") { state.route = state.typickleMatchStats && state.typickleMatchStats.backRoute==="viewer" ? "typickle-viewer" : "typickle-event"; state.typickleMatchStats = null; render(); }
     else if(action==="typickle-back-to-event") await typickleBackToEvent();
     else if(action==="submit-referee-code") await submitRefereeCode();
