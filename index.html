@@ -1359,6 +1359,32 @@ function renderTypickleTeamStats(ev){
       </table></div>
     </div>`;
 }
+function renderTypicklePodium(ev){
+  const teamName = id => (ev.teams.find(t=>t.id===id)||{}).name || "?";
+  const finalMatch = ev.bracket[ev.bracket.length-1][0];
+  const firstId = finalMatch.winner;
+  const secondId = finalMatch.winner===finalMatch.a.id ? finalMatch.b.id : finalMatch.a.id;
+  let thirdLine;
+  if(ev.thirdPlaceMatch && ev.thirdPlaceMatch.status==="complete"){
+    thirdLine = teamName(ev.thirdPlaceMatch.winner);
+  } else if(ev.bracket.length>=2){
+    const semis = ev.bracket[ev.bracket.length-2];
+    const loserOf = m => m.a && m.b ? (m.winner===m.a.id ? m.b : m.a) : null;
+    const losers = semis.map(loserOf).filter(l=>l && !l.bye).map(l=>teamName(l.id));
+    thirdLine = losers.length ? losers.join(" & ")+" (semifinalists)" : null;
+  }
+  return `
+    <div class="card" style="background:var(--court); border-color:var(--ink); text-align:center;">
+      <p class="eyebrow" style="color:var(--ball);">\ud83e\udd47 1st Place</p>
+      <h2 style="color:#fff; margin-bottom:14px;">${teamName(firstId)}</h2>
+      <p class="eyebrow" style="color:#DCEDEA;">\ud83e\udd48 2nd Place</p>
+      <p style="color:#fff; font-weight:800; font-size:18px; margin:2px 0 14px;">${teamName(secondId)}</p>
+      ${thirdLine ? `
+        <p class="eyebrow" style="color:#DCEDEA;">\ud83e\udd49 3rd Place</p>
+        <p style="color:#fff; font-weight:800; font-size:18px; margin:2px 0 0;">${thirdLine}</p>
+      ` : ""}
+    </div>`;
+}
 function typickleRoundName(round, totalRounds){
   const fromEnd = totalRounds - round;
   if(fromEnd===0) return "Final";
@@ -3764,11 +3790,7 @@ function renderTypickleEvent(){
         `).join("")}
         ${ev.thirdPlaceMatch ? `<p class="eyebrow" style="margin-top:14px; color:var(--ball);">3rd Place Playoff</p>${matchCard(ev.thirdPlaceMatch)}` : ""}
       </div>` : ""}
-    ${ev.status==="complete" ? `
-      <div class="card" style="background:var(--court); border-color:var(--ink); text-align:center;">
-        <p class="eyebrow" style="color:var(--ball);">Champion</p>
-        <h2 style="color:#fff;">${teamName(ev.bracket[ev.bracket.length-1][0].winner)}</h2>
-      </div>` : ""}`;
+    ${ev.status==="complete" ? renderTypicklePodium(ev) : ""}`;
 }
 function renderTypickleMatchStats(){
   if(state.loading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading match stats\u2026</div>`;
@@ -3845,11 +3867,7 @@ function renderTypickleViewer(){
         `).join("")}
         ${ev.thirdPlaceMatch ? `<p class="eyebrow" style="margin-top:14px; color:var(--ball);">3rd Place Playoff</p>${matchRow(ev.thirdPlaceMatch)}` : ""}
       </div>` : `<p class="help" style="text-align:center;">Bracket not generated yet &mdash; still in group stage.</p>`}
-    ${ev.status==="complete" ? `
-      <div class="card" style="background:var(--court); border-color:var(--ink); text-align:center;">
-        <p class="eyebrow" style="color:var(--ball);">Champion</p>
-        <h2 style="color:#fff;">${teamName(ev.bracket[ev.bracket.length-1][0].winner)}</h2>
-      </div>` : ""}`;
+    ${ev.status==="complete" ? renderTypicklePodium(ev) : ""}`;
 }
 function renderTypickleAllCourts(){
   const ev = state.typickleEvent;
