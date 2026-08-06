@@ -388,6 +388,7 @@ let state = {
   adminSessions: null,
   adminTypickleEvents: null,
   adminSoloCircuits: null,
+  adminDeepRenamePreview: null,
   currentRefereeCode: null,
   h2hResult: null,
   leaderboardScope: "all",
@@ -4996,7 +4997,16 @@ function renderAdminDashboard(){
         <div class="field"><label>Current name</label><input type="text" id="admin-rename-old" list="playerNamesHome" placeholder="Existing name"></div>
         <div class="field"><label>New name</label><input type="text" id="admin-rename-new" placeholder="Corrected name"></div>
       </div>
-      <button class="btn btn-ink btn-wide" data-action="admin-rename-player" style="margin-top:6px;">Rename</button>
+      <button class="btn btn-ink btn-wide" data-action="admin-rename-player" style="margin-top:6px;">Rename (shared list only)</button>
+      <button class="btn btn-outline btn-wide" data-action="admin-deep-rename-scan" style="margin-top:8px; border-color:#B0413E; color:#B0413E;">Deep Rename \u2014 also fix past sessions</button>
+      ${state.adminDeepRenamePreview ? `
+        <div class="card" style="background:var(--court); border-color:var(--ink); margin-top:14px;">
+          <p class="eyebrow" style="color:var(--ball);">Preview</p>
+          <p class="sub" style="color:#DCEDEA;">Found "<b>${state.adminDeepRenamePreview.oldName}</b>" in <b>${state.adminDeepRenamePreview.count}</b> session${state.adminDeepRenamePreview.count===1?"":"s"}. This will rewrite their name in every match record in those sessions, permanently.</p>
+          <button class="btn btn-ink btn-wide" data-action="admin-deep-rename-confirm" style="margin-top:8px;">Confirm \u2014 Rewrite ${state.adminDeepRenamePreview.count} Session${state.adminDeepRenamePreview.count===1?"":"s"}</button>
+          <button class="btn btn-outline btn-wide" data-action="admin-deep-rename-cancel" style="margin-top:8px; border-color:#fff; color:#fff;">Cancel</button>
+        </div>
+      ` : ""}
     </div>
     <div class="card" style="border-color:var(--ink); background:var(--kitchen);">
       <p class="eyebrow">Hidden fairness ratings (admin only)</p>
@@ -5593,6 +5603,9 @@ function bindEvents(){
     else if(action==="admin-open-typickle-event") await adminOpenTypickleEvent(el.dataset.code);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
     else if(action==="admin-rename-player") await adminRenamePlayer();
+    else if(action==="admin-deep-rename-scan") await adminDeepRenameScan();
+    else if(action==="admin-deep-rename-confirm") await adminDeepRenameConfirm();
+    else if(action==="admin-deep-rename-cancel") adminDeepRenameCancel();
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
     else if(action==="run-prediction-report") await runPredictionReport();
@@ -6072,6 +6085,75 @@ async function adminDeleteTypickleEvent(key){
   }catch(e){
     showToast("Delete failed");
   }
+}
+function renamePlayerInSession(t, oldName, newName){
+  let changed = false;
+  const renameParticipant = p => {
+    if(!p) return;
+    if(p.label===oldName){ p.label=newName; changed=true; }
+    if(p.players){ p.players = p.players.map(n=>{ if(n===oldName){ changed=true; return newName; } return n; }); }
+  };
+  (t.participants||[]).forEach(renameParticipant);
+  collectAllMatches(t).forEach(m=>{ renameParticipant(m.a); renameParticipant(m.b); });
+  return changed;
+}
+async function adminDeepRenameScan(){
+  const oldName = document.getElementById("admin-rename-old").value.trim();
+  const newName = document.getElementById("admin-rename-new").value.trim();
+  if(!oldName || !newName){ showToast("Enter both the current and new name"); return; }
+  if(oldName.toLowerCase()===newName.toLowerCase()){ showToast("That's the same name"); return; }
+  showToast("Scanning past sessions\u2026");
+  try{
+    const { data, error } = await sbClient.from("kv_store").select("key,value").like("key","tourney-%").limit(500);
+    if(error) throw error;
+    let count = 0;
+    (data||[]).forEach(row=>{
+      let t=null; try{ t = JSON.parse(row.value); }catch(e){ return; }
+      if(!t) return;
+      const clone = JSON.parse(JSON.stringify(t));
+      if(renamePlayerInSession(clone, oldName, newName)) count++;
+    });
+    state.adminDeepRenamePreview = { oldName, newName, count };
+    render();
+  }catch(e){
+    showToast("Scan failed \u2014 check your connection");
+  }
+}
+async function adminDeepRenameConfirm(){
+  const p = state.adminDeepRenamePreview;
+  if(!p) return;
+  try{
+    const { data, error } = await sbClient.from("kv_store").select("key,value").like("key","tourney-%").limit(500);
+    if(error) throw error;
+    let updated = 0;
+    for(const row of (data||[])){
+      let t=null; try{ t = JSON.parse(row.value); }catch(e){ continue; }
+      if(!t) continue;
+      if(renamePlayerInSession(t, p.oldName, p.newName)){
+        await sbClient.from("kv_store").update({value: JSON.stringify(t)}).eq("key", row.key);
+        updated++;
+      }
+    }
+    const raw = await storeGet(PLAYER_DB_KEY, true);
+    let db = []; try{ db = raw ? JSON.parse(raw) : []; }catch(e){ db = []; }
+    const entry = db.find(pl=>pl.name.toLowerCase()===p.oldName.toLowerCase());
+    if(entry) entry.name = p.newName;
+    else db.push({name: p.newName, dupr: null});
+    await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
+    state.playerDb = db;
+    state.adminDeepRenamePreview = null;
+    document.getElementById("admin-rename-old").value = "";
+    document.getElementById("admin-rename-new").value = "";
+    haptic("strong");
+    showToast(`Renamed "${p.oldName}" to "${p.newName}" across ${updated} session${updated===1?"":"s"}`);
+    render();
+  }catch(e){
+    showToast("\u26a0\ufe0f Something failed partway \u2014 check the sessions before retrying");
+  }
+}
+function adminDeepRenameCancel(){
+  state.adminDeepRenamePreview = null;
+  render();
 }
 async function adminRemovePlayer(name){
   if(!name){ showToast("Enter a player name"); return; }
