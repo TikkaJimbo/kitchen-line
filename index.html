@@ -4989,6 +4989,15 @@ function renderAdminDashboard(){
         </div>
       `).join("") : `<p class="help">No players yet.</p>`}
     </div>
+    <div class="card">
+      <p class="eyebrow">Rename a player</p>
+      <p class="sub" style="margin-top:0;">Fixes a typo or name change in the shared player list &mdash; affects autocomplete and DUPR lookup going forward. Doesn't rewrite names inside past sessions, so their older match history stays filed under the old name.</p>
+      <div class="row">
+        <div class="field"><label>Current name</label><input type="text" id="admin-rename-old" list="playerNamesHome" placeholder="Existing name"></div>
+        <div class="field"><label>New name</label><input type="text" id="admin-rename-new" placeholder="Corrected name"></div>
+      </div>
+      <button class="btn btn-ink btn-wide" data-action="admin-rename-player" style="margin-top:6px;">Rename</button>
+    </div>
     <div class="card" style="border-color:var(--ink); background:var(--kitchen);">
       <p class="eyebrow">Hidden fairness ratings (admin only)</p>
       <p class="sub" style="margin-top:0;">A private 0-100 rating you set for matchmaking balance only &mdash; never shown to players or viewers anywhere in the app. When set, rotating-partner (mixer) doubles pairs the two closest-rated teams against each other each round instead of a random draw, to cut down on lopsided games. Leave blank for players you don't want to rate &mdash; unrated players default to neutral and don't skew anyone else's pairing.</p>
@@ -5583,6 +5592,7 @@ function bindEvents(){
     else if(action==="admin-refresh-solo-circuits") { await loadAdminSoloCircuits(); render(); }
     else if(action==="admin-open-typickle-event") await adminOpenTypickleEvent(el.dataset.code);
     else if(action==="admin-remove-player") await adminRemovePlayer(document.getElementById("admin-remove-player").value.trim());
+    else if(action==="admin-rename-player") await adminRenamePlayer();
     else if(action==="admin-save-dupr") await adminSaveDupr(el.dataset.name);
     else if(action==="admin-save-fairness") await adminSaveFairness(el.dataset.name);
     else if(action==="run-prediction-report") await runPredictionReport();
@@ -6074,6 +6084,26 @@ async function adminRemovePlayer(name){
   await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
   state.playerDb = db;
   showToast(`Removed ${name} from the shared player list`);
+  render();
+}
+async function adminRenamePlayer(){
+  const oldName = document.getElementById("admin-rename-old").value.trim();
+  const newName = document.getElementById("admin-rename-new").value.trim();
+  if(!oldName || !newName){ showToast("Enter both the current and new name"); return; }
+  if(oldName.toLowerCase()===newName.toLowerCase()){ showToast("That's the same name"); return; }
+  const raw = await storeGet(PLAYER_DB_KEY, true);
+  let db = []; try{ db = raw ? JSON.parse(raw) : []; }catch(e){ db = []; }
+  const entry = db.find(p=>p.name.toLowerCase()===oldName.toLowerCase());
+  if(!entry){ showToast(`"${oldName}" not found in the shared list`); return; }
+  const collision = db.find(p=>p.name.toLowerCase()===newName.toLowerCase());
+  if(collision){ showToast(`"${newName}" already exists as a separate player \u2014 rename would merge two different people, refusing`); return; }
+  if(!confirm(`Rename "${oldName}" to "${newName}"? This only updates the shared list going forward \u2014 their past match history stays filed under "${oldName}".`)) return;
+  entry.name = newName;
+  await storeSet(PLAYER_DB_KEY, JSON.stringify(db), true);
+  state.playerDb = db;
+  document.getElementById("admin-rename-old").value = "";
+  document.getElementById("admin-rename-new").value = "";
+  showToast(`Renamed "${oldName}" to "${newName}"`);
   render();
 }
 async function adminAddPlayer(){
