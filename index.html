@@ -424,6 +424,14 @@ let state = {
   typickleCourtNum: null,
   typickleViewerEvent: null,
   typicklePollHandle: null,
+  soloCircuitSetup: { name: "Solo Circuit", players: [] },
+  soloCircuit: null,
+  soloCircuitCode: null,
+  soloCircuitLoading: false,
+  soloCircuitLegSetup: { name: "", venue: "", date: "", selectedPlayers: [] },
+  soloCircuitActiveLegId: null,
+  soloCircuitEditingMatch: null,
+  soloCircuitBulkImport: { rawText:"", legName:"Leg 1", venue:"", date:"", rejectedMerges:[], parsed:null },
   typickleMatchStats: null,
   typickleForfeitMenuFor: null,
   typickleEditingMatch: null,
@@ -456,6 +464,133 @@ async function storeSet(key, value, shared){
   }catch(e){ console.error("storeSet failed", e); return null; }
 }
 const TYPICKLE_EVENT_PREFIX = "typickle-event-";
+const SOLO_CIRCUIT_PREFIX = "solocircuit-";
+async function generateUniqueCircuitCode(){
+  for(let i=0;i<12;i++){
+    let c=""; for(let j=0;j<5;j++) c+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];
+    const v = await storeGet(SOLO_CIRCUIT_PREFIX+c, true);
+    if(v===null) return c;
+  }
+  return ("SC"+Date.now()).slice(-6);
+}
+async function saveSoloCircuit(code, circuit){
+  await storeSet(SOLO_CIRCUIT_PREFIX+code, JSON.stringify(circuit), true);
+}
+async function loadSoloCircuit(code){
+  const raw = await storeGet(SOLO_CIRCUIT_PREFIX+code, true);
+  if(!raw) return null;
+  try{ return JSON.parse(raw); }catch(e){ return null; }
+}
+function generateLegMatches(playerNames){
+  const participants = playerNames.map(name=>({id:name, label:name}));
+  const raw = generateRoundRobin(participants);
+  return raw.filter(m=>!m.isBye).map((m,i)=>({
+    id:"m"+i, a:m.a.label, b:m.b.label, scoreA:null, scoreB:null, winner:null, status:"scheduled"
+  }));
+}
+function computeLegStandings(leg){
+  const table = {};
+  leg.playerNames.forEach(name=>{ table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0 }; });
+  leg.matches.forEach(m=>{
+    if(m.status!=="complete") return;
+    const rowA = table[m.a], rowB = table[m.b];
+    if(!rowA || !rowB) return;
+    rowA.played++; rowB.played++;
+    rowA.pf += m.scoreA; rowA.pa += m.scoreB;
+    rowB.pf += m.scoreB; rowB.pa += m.scoreA;
+    if(m.winner===m.a){ rowA.won++; rowB.lost++; } else { rowB.won++; rowA.lost++; }
+  });
+  return Object.values(table).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
+}
+function levenshtein(a,b){
+  const m=a.length, n=b.length;
+  const dp = Array.from({length:m+1},()=>new Array(n+1).fill(0));
+  for(let i=0;i<=m;i++) dp[i][0]=i;
+  for(let j=0;j<=n;j++) dp[0][j]=j;
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
+    }
+  }
+  return dp[m][n];
+}
+function parseSoloCircuitBulkText(text){
+  let cleaned = text.replace(/[\u200B-\u200D\uFEFF\u2060]/g, ' ');
+  const rawEntries = cleaned.split(/(?=\b\d{1,3}\.\s)/).map(s=>s.trim()).filter(Boolean);
+  const matches = [];
+  const errors = [];
+  rawEntries.forEach(entry=>{
+    const withoutNum = entry.replace(/^\d{1,3}\.\s*/, '').trim();
+    const m = withoutNum.match(/^(.+?)\s+vs\.?\s+(.+?)\s*-\s*([A-Za-z][A-Za-z\s]*?)\s*(\d+)\s*-\s*(\d+)\s*$/i);
+    if(!m){ errors.push(entry); return; }
+    let [, playerA, playerB, winnerRaw, scoreW, scoreL] = m;
+    matches.push({ playerA:playerA.trim(), playerB:playerB.trim(), winnerRaw:winnerRaw.trim(), scoreW:+scoreW, scoreL:+scoreL, raw:entry });
+  });
+  return { matches, errors };
+}
+function normalizeParsedNames(parsed, rejectedFromNames){
+  rejectedFromNames = rejectedFromNames || [];
+  const freq = {};
+  const bump = n => { const key=n.toLowerCase(); freq[key] = (freq[key]||0)+1; };
+  parsed.matches.forEach(m=>{ bump(m.playerA); bump(m.playerB); bump(m.winnerRaw); });
+  const distinctLower = Object.keys(freq);
+  const properCase = {};
+  parsed.matches.forEach(m=>{
+    [m.playerA, m.playerB, m.winnerRaw].forEach(n=>{
+      const key = n.toLowerCase();
+      if(!properCase[key] || freq[key]>=(freq[properCase[key].toLowerCase()]||0)) properCase[key] = n;
+    });
+  });
+  const canonicalMap = {};
+  distinctLower.forEach(name=>{ canonicalMap[name] = properCase[name] || name; });
+  const mergeSuggestions = [];
+  distinctLower.forEach(name=>{
+    if(freq[name]>2) return;
+    let best = null;
+    distinctLower.forEach(other=>{
+      if(other===name) return;
+      if(freq[other]<=freq[name]) return;
+      if(levenshtein(name, other)<=2){
+        if(!best || freq[other]>freq[best]) best = other;
+      }
+    });
+    if(best){
+      const suggestion = { from: properCase[name], to: canonicalMap[best], fromCount: freq[name], toCount: freq[best] };
+      mergeSuggestions.push(suggestion);
+      if(!rejectedFromNames.includes(suggestion.from)) canonicalMap[name] = canonicalMap[best];
+    }
+  });
+  const playerCounts = {};
+  parsed.matches.forEach(m=>{
+    const a = canonicalMap[m.playerA.toLowerCase()];
+    const b = canonicalMap[m.playerB.toLowerCase()];
+    playerCounts[a] = (playerCounts[a]||0)+1;
+    playerCounts[b] = (playerCounts[b]||0)+1;
+  });
+  const finalMatches = parsed.matches.map(m=>{
+    const a = canonicalMap[m.playerA.toLowerCase()];
+    const b = canonicalMap[m.playerB.toLowerCase()];
+    const winner = canonicalMap[m.winnerRaw.toLowerCase()];
+    const scoreA = winner===a ? m.scoreW : m.scoreL;
+    const scoreB = winner===b ? m.scoreW : m.scoreL;
+    return { a, b, scoreA, scoreB, winner, raw:m.raw };
+  });
+  return { players: Object.keys(playerCounts).sort(), playerCounts, mergeSuggestions, finalMatches, errors:parsed.errors };
+}
+function computeCircuitStandings(circuit){
+  const table = {};
+  circuit.legs.forEach(leg=>{
+    leg.matches.forEach(m=>{
+      if(m.status!=="complete") return;
+      [m.a,m.b].forEach(name=>{ if(!table[name]) table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, legsPlayed:new Set() }; });
+      table[m.a].legsPlayed.add(leg.id); table[m.b].legsPlayed.add(leg.id);
+      table[m.a].played++; table[m.a].pf+=m.scoreA; table[m.a].pa+=m.scoreB;
+      table[m.b].played++; table[m.b].pf+=m.scoreB; table[m.b].pa+=m.scoreA;
+      if(m.winner===m.a){ table[m.a].won++; table[m.b].lost++; } else { table[m.b].won++; table[m.a].lost++; }
+    });
+  });
+  return Object.values(table).map(r=>({...r, legsPlayed:r.legsPlayed.size})).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
+}
 async function generateUniqueEventCode(){
   for(let i=0;i<12;i++){
     let c=""; for(let j=0;j<5;j++) c+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)];
@@ -1742,6 +1877,179 @@ function renderMomentumChart(series, labelA, labelB){
     ${coords.map((c,i)=>`<g><title>Rally ${series[i].point}: ${series[i].scoreA}-${series[i].scoreB}</title><circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="8" fill="transparent"/></g>`).join("")}
   </svg>`;
 }
+function solocircuitParseBulk(){
+  const bi = state.soloCircuitBulkImport;
+  bi.legName = document.getElementById("bulk-leg-name").value.trim() || "Leg 1";
+  bi.venue = document.getElementById("bulk-leg-venue").value.trim();
+  bi.date = document.getElementById("bulk-leg-date").value;
+  bi.rawText = document.getElementById("bulk-leg-text").value;
+  if(!bi.rawText.trim()){ showToast("Paste some results first"); return; }
+  bi.rejectedMerges = [];
+  const parsed = parseSoloCircuitBulkText(bi.rawText);
+  bi.parsed = normalizeParsedNames(parsed, bi.rejectedMerges);
+  render();
+}
+function solocircuitToggleMerge(name){
+  const bi = state.soloCircuitBulkImport;
+  const pos = bi.rejectedMerges.indexOf(name);
+  if(pos>=0) bi.rejectedMerges.splice(pos,1); else bi.rejectedMerges.push(name);
+  const parsed = parseSoloCircuitBulkText(bi.rawText);
+  bi.parsed = normalizeParsedNames(parsed, bi.rejectedMerges);
+  render();
+}
+async function solocircuitConfirmBulk(){
+  const bi = state.soloCircuitBulkImport;
+  const p = bi.parsed;
+  if(!p || p.errors.length) return;
+  let c = state.soloCircuit;
+  if(!c){
+    const code = await generateUniqueCircuitCode();
+    c = { code, name: state.soloCircuitSetup.name || "Solo Circuit", createdAt: new Date().toISOString(), players: [], legs: [] };
+  }
+  p.players.forEach(name=>{
+    if(!c.players.some(pl=>pl.name===name)){
+      const dbEntry = state.playerDb.find(pl=>pl.name.toLowerCase()===name.toLowerCase());
+      c.players.push({ name, dupr: dbEntry ? dbEntry.dupr : null });
+    }
+  });
+  const leg = {
+    id: "leg"+(c.legs.length+1)+"-"+Date.now(),
+    name: bi.legName, venue: bi.venue, date: bi.date,
+    playerNames: p.players.slice(),
+    matches: p.finalMatches.map((m,i)=>({ id:"m"+i, a:m.a, b:m.b, scoreA:m.scoreA, scoreB:m.scoreB, winner:m.winner, status:"complete" }))
+  };
+  c.legs.push(leg);
+  try{
+    await saveSoloCircuit(c.code, c);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save \u2014 check your connection and try again");
+    return;
+  }
+  state.soloCircuit = c;
+  state.soloCircuitCode = c.code;
+  try{ localStorage.setItem("solocircuit-current", c.code); }catch(e){}
+  state.soloCircuitBulkImport = { rawText:"", legName:"Leg "+(c.legs.length+1), venue:"", date:"", rejectedMerges:[], parsed:null };
+  state.route = "solocircuit-event";
+  haptic("medium");
+  showToast(`${leg.name} imported \u2014 ${leg.matches.length} matches, ${p.players.length} players`);
+  render();
+}
+function solocircuitEditMatch(matchId){
+  state.soloCircuitEditingMatch = matchId;
+  render();
+}
+function solocircuitCancelEdit(){
+  state.soloCircuitEditingMatch = null;
+  render();
+}
+async function solocircuitSaveMatch(matchId){
+  const c = state.soloCircuit;
+  const leg = c.legs.find(l=>l.id===state.soloCircuitActiveLegId);
+  const m = leg.matches.find(x=>x.id===matchId);
+  const scoreA = +document.getElementById("sc-scoreA-"+matchId).value;
+  const scoreB = +document.getElementById("sc-scoreB-"+matchId).value;
+  if(isNaN(scoreA) || isNaN(scoreB)){ showToast("Enter both scores"); return; }
+  if(scoreA===scoreB){ showToast("Scores can't be tied \u2014 there must be a winner"); return; }
+  m.scoreA = scoreA; m.scoreB = scoreB;
+  m.winner = scoreA>scoreB ? m.a : m.b;
+  m.status = "complete";
+  try{
+    await saveSoloCircuit(c.code, c);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save \u2014 check your connection");
+    return;
+  }
+  state.soloCircuitEditingMatch = null;
+  haptic("medium");
+  render();
+}
+function solocircuitToggleLegPlayer(name){
+  const sel = state.soloCircuitLegSetup.selectedPlayers;
+  const idx = sel.indexOf(name);
+  if(idx>=0) sel.splice(idx,1); else sel.push(name);
+  render();
+}
+async function createSoloCircuitLeg(){
+  const c = state.soloCircuit;
+  const name = document.getElementById("leg-name-input").value.trim() || `Leg ${c.legs.length+1}`;
+  const venue = document.getElementById("leg-venue-input").value.trim();
+  const date = document.getElementById("leg-date-input").value;
+  const players = state.soloCircuitLegSetup.selectedPlayers.slice();
+  if(players.length<2){ showToast("Select at least 2 players"); return; }
+  const leg = {
+    id: "leg"+(c.legs.length+1)+"-"+Date.now(),
+    name, venue, date,
+    playerNames: players,
+    matches: generateLegMatches(players)
+  };
+  c.legs.push(leg);
+  try{
+    await saveSoloCircuit(c.code, c);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save \u2014 check your connection");
+    return;
+  }
+  state.soloCircuitLegSetup = { name:"", venue:"", date:"", selectedPlayers:[] };
+  haptic("medium");
+  showToast(`${leg.name} created with ${leg.matches.length} matches`);
+  render();
+}
+async function openSoloCircuitLeg(legId){
+  state.soloCircuitActiveLegId = legId;
+  state.route = "solocircuit-leg";
+  render();
+}
+function solocircuitAddPlayer(){
+  const nameEl = document.getElementById("solocircuit-player-name");
+  const duprEl = document.getElementById("solocircuit-player-dupr");
+  const name = nameEl.value.trim();
+  if(!name){ showToast("Enter a player name"); return; }
+  const f = state.soloCircuitSetup;
+  if(f.players.some(p=>p.name.toLowerCase()===name.toLowerCase())){ showToast("Already added"); return; }
+  const dbEntry = state.playerDb.find(p=>p.name.toLowerCase()===name.toLowerCase());
+  const duprVal = duprEl.value.trim();
+  const dupr = duprVal ? parseFloat(duprVal) : (dbEntry ? dbEntry.dupr : null);
+  f.players.push({name, dupr});
+  nameEl.value=""; duprEl.value="";
+  render();
+}
+function solocircuitRemovePlayer(idx){
+  state.soloCircuitSetup.players.splice(idx,1);
+  render();
+}
+async function solocircuitEnterCode(){
+  const input = document.getElementById("solocircuit-enter-code-input");
+  const code = input.value.trim().toUpperCase();
+  if(!code){ showToast("Enter a circuit code"); return; }
+  state.soloCircuitLoading = true; render();
+  const c = await loadSoloCircuit(code);
+  state.soloCircuitLoading = false;
+  if(!c){ showToast("No circuit found with that code"); render(); return; }
+  state.soloCircuit = c;
+  state.soloCircuitCode = code;
+  try{ localStorage.setItem("solocircuit-current", code); }catch(e){}
+  state.route = "solocircuit-event";
+  render();
+}
+async function createSoloCircuit(){
+  const f = state.soloCircuitSetup;
+  f.name = document.getElementById("solocircuit-name").value.trim() || "Solo Circuit";
+  if(f.players.length<2){ showToast("Add at least 2 players"); return; }
+  const code = await generateUniqueCircuitCode();
+  const circuit = { code, name: f.name, createdAt: new Date().toISOString(), players: f.players.slice(), legs: [] };
+  try{
+    await saveSoloCircuit(code, circuit);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save the circuit \u2014 check your connection");
+    return;
+  }
+  state.soloCircuit = circuit;
+  state.soloCircuitCode = code;
+  try{ localStorage.setItem("solocircuit-current", code); }catch(e){}
+  state.route = "solocircuit-event";
+  haptic("medium");
+  render();
+}
 function typickleAddPlayer(){
   const nameEl = document.getElementById("typickle-player-name");
   const duprEl = document.getElementById("typickle-player-dupr");
@@ -1884,6 +2192,24 @@ async function typickleEnterEventCode(){
   state.typickleEventCode = code;
   try{ localStorage.setItem("typickle-current-event", code); }catch(e){}
   state.route = "typickle-event";
+  render();
+}
+async function goSoloCircuitHome(){
+  let existingCode = null;
+  try{ existingCode = localStorage.getItem("solocircuit-current"); }catch(e){}
+  if(existingCode){
+    state.soloCircuitLoading = true; state.route = "solocircuit-event"; render();
+    const c = await loadSoloCircuit(existingCode);
+    state.soloCircuitLoading = false;
+    if(c){
+      state.soloCircuit = c;
+      state.soloCircuitCode = existingCode;
+      render();
+      return;
+    }
+    try{ localStorage.removeItem("solocircuit-current"); }catch(e){}
+  }
+  state.route = "solocircuit-setup";
   render();
 }
 async function goTypickleHome(){
@@ -2878,6 +3204,10 @@ function render(){
   else if(state.route==="typickle-event") view.innerHTML = renderTypickleEvent();
   else if(state.route==="typickle-court") view.innerHTML = renderTypickleCourtQueue();
   else if(state.route==="typickle-all-courts") view.innerHTML = renderTypickleAllCourts();
+  else if(state.route==="solocircuit-setup") view.innerHTML = renderSoloCircuitSetup();
+  else if(state.route==="solocircuit-event") view.innerHTML = renderSoloCircuitEvent();
+  else if(state.route==="solocircuit-leg") view.innerHTML = renderSoloCircuitLeg();
+  else if(state.route==="solocircuit-bulk") view.innerHTML = renderSoloCircuitBulkImport();
   else if(state.route==="typickle-viewer") view.innerHTML = renderTypickleViewer();
   else if(state.route==="typickle-match-stats") view.innerHTML = renderTypickleMatchStats();
   bindEvents();
@@ -2930,11 +3260,12 @@ function renderHome(){
 
     <div class="card" style="border-color:var(--court);">
       <p class="eyebrow">Powered by Typickle Events</p>
-      <h2>Live Tournaments</h2>
+      <h2>Tournaments</h2>
       <p class="sub">Full live-scoring tournaments, kept separate from regular recreational sessions.</p>
       <div class="chip-group">
         <button class="btn btn-outline btn-sm" data-action="go-livescore" style="border-color:var(--court); color:var(--court);">🏓 Live Scoring (Preview)</button>
         <button class="btn btn-outline btn-sm" data-action="go-typickle-setup" style="border-color:var(--ball); color:var(--ink); background:rgba(215,230,57,0.2);">🏆 Typickle Tournament 1.0</button>
+        <button class="btn btn-outline btn-sm" data-action="go-solocircuit" style="border-color:var(--kitchen); color:var(--ink); background:rgba(14,92,85,0.08);">🎯 Solo Circuit</button>
       </div>
       <div class="join-row" style="margin-top:12px;">
         <input type="text" id="typickleViewerCodeInput" maxlength="6" placeholder="Event code e.g. 7QXPB">
@@ -3614,6 +3945,167 @@ function renderRefereeGate(){
       <p class="sub">Enter the shared referee code to score matches. Ask the tournament organizer if you don't have it.</p>
       <div class="field"><label>Referee code</label><input type="password" id="referee-code-input" placeholder="Enter code"></div>
       <button class="btn btn-ink btn-wide" data-action="submit-referee-code">Enter</button>
+    </div>`;
+}
+function renderSoloCircuitBulkImport(){
+  const bi = state.soloCircuitBulkImport;
+  const c = state.soloCircuit;
+  return `
+    <button class="back-link" data-action="${c?'go-solocircuit-event':'go-home'}">&larr; Back</button>
+    <div class="card">
+      <p class="eyebrow">Bulk Import ${c ? "\u2014 "+c.name : "\u2014 New Circuit"}</p>
+      <h2>Paste match results</h2>
+      <p class="sub">Format: "1. PlayerA vs PlayerB - Winner Score-Score", one per line. Handles messy pasting \u2014 merged lines, missing spaces, minor typos.</p>
+      <div class="row">
+        <div class="field"><label>Leg name</label><input type="text" id="bulk-leg-name" value="${bi.legName}"></div>
+        <div class="field"><label>Venue</label><input type="text" id="bulk-leg-venue" value="${bi.venue}"></div>
+      </div>
+      <div class="field"><label>Date</label><input type="date" id="bulk-leg-date" value="${bi.date}"></div>
+      <div class="field"><label>Paste results here</label><textarea id="bulk-leg-text" rows="10" style="width:100%; font-family:monospace; font-size:13px; padding:10px; border:2px solid var(--ink); border-radius:10px;">${bi.rawText}</textarea></div>
+      <button class="btn btn-ink btn-wide" data-action="solocircuit-parse-bulk" style="margin-top:10px;">Parse Results</button>
+    </div>
+    ${bi.parsed ? renderSoloCircuitBulkPreview(bi) : ""}`;
+}
+function renderSoloCircuitBulkPreview(bi){
+  const p = bi.parsed;
+  return `
+    <div class="card" style="border-color:var(--court);">
+      <p class="eyebrow">Preview \u2014 ${p.finalMatches.length} matches, ${p.players.length} players</p>
+      ${p.errors.length ? `
+        <p class="sub" style="color:#B0413E;"><b>${p.errors.length} line${p.errors.length===1?"":"s"} couldn't be parsed</b> \u2014 fix these in the text above and re-parse:</p>
+        ${p.errors.map(e=>`<p class="help" style="color:#B0413E; font-family:monospace;">${e}</p>`).join("")}
+      ` : `<p class="sub" style="color:var(--court);">\u2713 Every line parsed successfully.</p>`}
+      ${p.mergeSuggestions.length ? `
+        <p class="eyebrow" style="margin-top:14px;">Possible typos detected</p>
+        ${p.mergeSuggestions.map(sug=>`
+          <label style="display:flex; align-items:center; gap:8px; margin:8px 0;">
+            <input type="checkbox" data-action="solocircuit-toggle-merge" data-name="${sug.from}" ${bi.rejectedMerges.includes(sug.from)?"":"checked"} style="width:18px; height:18px;">
+            <span>Treat "<b>${sug.from}</b>" (${sug.fromCount} mention${sug.fromCount===1?"":"s"}) as the same person as "<b>${sug.to}</b>" (${sug.toCount} mentions)</span>
+          </label>`).join("")}
+      ` : ""}
+      <p class="eyebrow" style="margin-top:14px;">Players (${p.players.length})</p>
+      <div class="chip-group">${p.players.map(name=>`<span class="chip active">${name} <span class="help" style="color:inherit;">(${p.playerCounts[name]})</span></span>`).join("")}</div>
+      <button class="btn btn-ink btn-wide" data-action="solocircuit-confirm-bulk" style="margin-top:16px;" ${p.errors.length?"disabled":""}>Confirm &amp; Import</button>
+      ${p.errors.length ? `<p class="help" style="text-align:center; color:#B0413E;">Fix the unparsed lines above before importing.</p>` : ""}
+    </div>`;
+}
+function renderSoloCircuitLeg(){
+  const c = state.soloCircuit;
+  if(!c) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Circuit not found</h2></div>`;
+  const leg = c.legs.find(l=>l.id===state.soloCircuitActiveLegId);
+  if(!leg) return `<button class="back-link" data-action="go-solocircuit-event">&larr; Back</button><div class="card"><h2>Leg not found</h2></div>`;
+  const standings = computeLegStandings(leg);
+  return `
+    <button class="back-link" data-action="go-solocircuit-event">&larr; Back to Circuit</button>
+    <div class="card" style="background:var(--kitchen); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">${c.name}</p>
+      <h2 style="color:#fff;">${leg.name}</h2>
+      <p class="sub" style="color:#DCEDEA;">${leg.venue||"No venue set"} ${leg.date?"&middot; "+leg.date:""}</p>
+    </div>
+    <div class="card">
+      <p class="eyebrow">${leg.name} Standings</p>
+      <div class="table-scroll"><table>
+        <tr><th>#</th><th>Player</th><th>P</th><th>W-L</th><th>+/-</th></tr>
+        ${standings.map((r,i)=>`<tr class="${i===0&&r.played?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.played?(r.pf-r.pa>0?"+":"")+(r.pf-r.pa):"&mdash;"}</td></tr>`).join("")}
+      </table></div>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Matches</p>
+      ${leg.matches.map(m=>`
+        <div class="match-card">
+          <div class="side ${m.status==="complete"&&m.winner===m.a?"win":""}">${m.a}</div>
+          <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">${m.status==="complete" ? `${m.scoreA}-${m.scoreB}` : "&mdash;"}</div>
+          <div class="side ${m.status==="complete"&&m.winner===m.b?"win":""}" style="text-align:right;">${m.b}</div>
+          <button class="btn ${m.status==='complete'?'btn-outline':'btn-ink'} btn-sm" data-action="solocircuit-edit-match" data-match="${m.id}">${m.status==="complete"?"Edit Score":"Enter Score"}</button>
+        </div>
+        ${state.soloCircuitEditingMatch===m.id ? `
+        <div class="match-card" style="background:var(--kitchen); flex-wrap:wrap;">
+          <div class="field" style="min-width:110px;"><label style="color:#DCEDEA;">${m.a}</label><input type="number" min="0" id="sc-scoreA-${m.id}" value="${m.scoreA!=null?m.scoreA:''}"></div>
+          <div class="field" style="min-width:110px;"><label style="color:#DCEDEA;">${m.b}</label><input type="number" min="0" id="sc-scoreB-${m.id}" value="${m.scoreB!=null?m.scoreB:''}"></div>
+          <div style="flex:1 1 100%; display:flex; gap:8px; margin-top:6px;">
+            <button class="btn btn-ink btn-sm" data-action="solocircuit-save-match" data-match="${m.id}">Save</button>
+            <button class="btn btn-outline btn-sm" data-action="solocircuit-cancel-edit" style="border-color:#fff; color:#fff;">Cancel</button>
+          </div>
+        </div>` : ""}
+      `).join("")}
+    </div>`;
+}
+function renderSoloCircuitEvent(){
+  if(state.soloCircuitLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
+  const c = state.soloCircuit;
+  if(!c) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Circuit not found</h2></div>`;
+  const standings = computeCircuitStandings(c);
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back to Home</button>
+    <div class="card" style="background:var(--kitchen); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Solo Circuit</p>
+      <h2 style="color:#fff;">${c.name}</h2>
+      <p class="sub" style="color:#DCEDEA;">Circuit Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${c.code}</b></p>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Circuit Standings</p>
+      <p class="sub" style="margin-top:0;">Cumulative across every leg a player has taken part in.</p>
+      ${!standings.length ? `<p class="help">No completed matches yet.</p>` : `
+      <div class="table-scroll"><table>
+        <tr><th>#</th><th>Player</th><th>Legs</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th></tr>
+        ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.legsPlayed}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${Math.round((r.won/r.played)*100)}%</td><td>${r.pf-r.pa>0?"+":""}${r.pf-r.pa}</td></tr>`).join("")}
+      </table></div>`}
+    </div>
+    <div class="card">
+      <p class="eyebrow">Add a Leg</p>
+      <button class="btn btn-outline btn-sm" data-action="go-solocircuit-bulk" style="margin-bottom:12px;">Bulk-import results instead</button>
+      <div class="row">
+        <div class="field"><label>Leg name</label><input type="text" id="leg-name-input" placeholder="e.g. Leg 2"></div>
+        <div class="field"><label>Venue</label><input type="text" id="leg-venue-input" placeholder="e.g. Colombo Courts"></div>
+      </div>
+      <div class="field"><label>Date</label><input type="date" id="leg-date-input"></div>
+      <p class="eyebrow" style="margin-top:12px;">Players in this leg</p>
+      <div class="chip-group">
+        ${c.players.map(p=>`<span class="chip ${state.soloCircuitLegSetup.selectedPlayers.includes(p.name)?"active":""}" data-action="solocircuit-toggle-leg-player" data-name="${p.name}" style="cursor:pointer;">${p.name}</span>`).join("")}
+      </div>
+      <button class="btn btn-ink btn-wide" data-action="solocircuit-create-leg" style="margin-top:14px;" ${state.soloCircuitLegSetup.selectedPlayers.length<2?"disabled":""}>Create Leg &amp; Generate Matches</button>
+    </div>
+    ${c.legs.map(leg=>{
+      const legStandings = computeLegStandings(leg);
+      const completedCount = leg.matches.filter(m=>m.status==="complete").length;
+      return `
+      <div class="card" data-action="solocircuit-open-leg" data-leg="${leg.id}" style="cursor:pointer;">
+        <p class="eyebrow">${leg.name}</p>
+        <p class="sub" style="margin-top:0;">${leg.venue||"No venue set"} ${leg.date?"&middot; "+leg.date:""} &middot; ${completedCount}/${leg.matches.length} matches entered</p>
+        ${legStandings.length && legStandings[0].played ? `<p class="help">Leading: <b>${legStandings[0].name}</b> (${legStandings[0].won}-${legStandings[0].lost})</p>` : ""}
+      </div>`;
+    }).join("")}`;
+}
+function renderSoloCircuitSetup(){
+  if(state.soloCircuitLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
+  const f = state.soloCircuitSetup;
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back</button>
+    <div class="card" style="border-color:var(--court);">
+      <p class="eyebrow">Already running a Solo Circuit?</p>
+      <h2>Enter its code</h2>
+      <div class="join-row">
+        <input type="text" id="solocircuit-enter-code-input" maxlength="6" placeholder="Circuit code">
+        <button class="btn btn-ink" data-action="solocircuit-enter-code">Open</button>
+      </div>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Solo Circuit</p>
+      <h2>Set up a new circuit</h2>
+      <p class="sub">Singles league play across multiple legs (venues), with cumulative circuit standings. Kept separate from doubles tournaments and recreational stats.</p>
+      <div class="field"><label>Circuit name</label><input type="text" id="solocircuit-name" value="${f.name}"></div>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Players</p>
+      <p class="sub" style="margin-top:0;">Add the full player pool for this circuit. You'll pick who's in each leg separately.</p>
+      <div class="player-add-row">
+        <div class="field"><label>Player name</label><input type="text" id="solocircuit-player-name" list="playerNamesHome" placeholder="Player name"></div>
+        <div class="field dupr"><label>DUPR</label><input type="text" id="solocircuit-player-dupr" placeholder="3.5"></div>
+        <button class="btn btn-ink btn-sm" data-action="solocircuit-add-player" style="height:44px;">Add</button>
+      </div>
+      ${f.players.length ? `<div class="chip-group">${f.players.map((p,i)=>`<span class="chip active" data-action="solocircuit-remove-player" data-idx="${i}" style="cursor:pointer;">${p.name}${p.dupr?` (${p.dupr})`:""} &times;</span>`).join("")}</div>` : `<p class="help">No players added yet.</p>`}
+      <button class="btn btn-ink btn-wide" data-action="solocircuit-create" ${f.players.length<2?"disabled":""} style="margin-top:14px;">Create Circuit</button>
+      <button class="btn btn-outline btn-wide" data-action="go-solocircuit-bulk" style="margin-top:8px;">Or bulk-import a leg's results instead</button>
     </div>`;
 }
 function renderTypickleSetup(){
@@ -4884,6 +5376,22 @@ function bindEvents(){
     else if(action==="go-partnerships") openPartnerships();
     else if(action==="go-livescore") await openLiveScoring();
     else if(action==="go-typickle-setup") await goTypickleHome();
+    else if(action==="go-solocircuit") await goSoloCircuitHome();
+    else if(action==="solocircuit-add-player") solocircuitAddPlayer();
+    else if(action==="solocircuit-remove-player") solocircuitRemovePlayer(+el.dataset.idx);
+    else if(action==="solocircuit-enter-code") await solocircuitEnterCode();
+    else if(action==="solocircuit-create") await createSoloCircuit();
+    else if(action==="solocircuit-toggle-leg-player") solocircuitToggleLegPlayer(el.dataset.name);
+    else if(action==="solocircuit-create-leg") await createSoloCircuitLeg();
+    else if(action==="solocircuit-open-leg") await openSoloCircuitLeg(el.dataset.leg);
+    else if(action==="go-solocircuit-event") { state.route="solocircuit-event"; render(); }
+    else if(action==="solocircuit-edit-match") solocircuitEditMatch(el.dataset.match);
+    else if(action==="solocircuit-cancel-edit") solocircuitCancelEdit();
+    else if(action==="solocircuit-save-match") await solocircuitSaveMatch(el.dataset.match);
+    else if(action==="go-solocircuit-bulk") { state.route="solocircuit-bulk"; render(); }
+    else if(action==="solocircuit-parse-bulk") solocircuitParseBulk();
+    else if(action==="solocircuit-toggle-merge") solocircuitToggleMerge(el.dataset.name);
+    else if(action==="solocircuit-confirm-bulk") await solocircuitConfirmBulk();
     else if(action==="typickle-enter-event-code") await typickleEnterEventCode();
     else if(action==="typickle-add-player") typickleAddPlayer();
     else if(action==="typickle-remove-player") typickleRemovePlayer(+el.dataset.idx);
