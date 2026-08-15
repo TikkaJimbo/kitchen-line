@@ -495,14 +495,16 @@ function generateLegMatches(playerNames){
 }
 function computeSoloCircuitMatchPoints(myScore, oppScore, won){
   if(won){
-    return oppScore===0 ? 6 : 5;
+    const bonus = oppScore===0 ? 1 : 0;
+    return { base:5, bonus, total:5+bonus };
   }
-  const margin = oppScore - myScore;
-  return margin<=2 ? 2 : 1;
+  const trueDeuceLoss = myScore>=10; // genuinely went to deuce (e.g. 12-10, 13-11) -- not just any 2pt margin like 11-9
+  const bonus = trueDeuceLoss ? 1 : 0;
+  return { base:1, bonus, total:1+bonus };
 }
 function computeLegStandings(leg){
   const table = {};
-  leg.playerNames.forEach(name=>{ table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, points:0 }; });
+  leg.playerNames.forEach(name=>{ table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, bonus:0, points:0 }; });
   leg.matches.forEach(m=>{
     if(m.status!=="complete") return;
     const rowA = table[m.a], rowB = table[m.b];
@@ -512,8 +514,10 @@ function computeLegStandings(leg){
     rowB.pf += m.scoreB; rowB.pa += m.scoreA;
     const aWon = m.winner===m.a;
     if(aWon){ rowA.won++; rowB.lost++; } else { rowB.won++; rowA.lost++; }
-    rowA.points += computeSoloCircuitMatchPoints(m.scoreA, m.scoreB, aWon);
-    rowB.points += computeSoloCircuitMatchPoints(m.scoreB, m.scoreA, !aWon);
+    const ptsA = computeSoloCircuitMatchPoints(m.scoreA, m.scoreB, aWon);
+    const ptsB = computeSoloCircuitMatchPoints(m.scoreB, m.scoreA, !aWon);
+    rowA.bonus += ptsA.bonus; rowA.points += ptsA.total;
+    rowB.bonus += ptsB.bonus; rowB.points += ptsB.total;
   });
   return Object.values(table).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
 }
@@ -582,29 +586,37 @@ function normalizeParsedNames(parsed, rejectedFromNames){
     playerCounts[a] = (playerCounts[a]||0)+1;
     playerCounts[b] = (playerCounts[b]||0)+1;
   });
-  const finalMatches = parsed.matches.map(m=>{
+  const extraErrors = [];
+  const finalMatches = [];
+  parsed.matches.forEach(m=>{
     const a = canonicalMap[m.playerA.toLowerCase()];
     const b = canonicalMap[m.playerB.toLowerCase()];
     const winner = canonicalMap[m.winnerRaw.toLowerCase()];
+    if(winner!==a && winner!==b){
+      extraErrors.push(`${m.raw}  \u2190 winner "${m.winnerRaw}" doesn't match either listed player`);
+      return;
+    }
     const scoreA = winner===a ? m.scoreW : m.scoreL;
     const scoreB = winner===b ? m.scoreW : m.scoreL;
-    return { a, b, scoreA, scoreB, winner, raw:m.raw };
+    finalMatches.push({ a, b, scoreA, scoreB, winner, raw:m.raw });
   });
-  return { players: Object.keys(playerCounts).sort(), playerCounts, mergeSuggestions, finalMatches, errors:parsed.errors };
+  return { players: Object.keys(playerCounts).sort(), playerCounts, mergeSuggestions, finalMatches, errors:parsed.errors.concat(extraErrors) };
 }
 function computeCircuitStandings(circuit){
   const table = {};
   circuit.legs.forEach(leg=>{
     leg.matches.forEach(m=>{
       if(m.status!=="complete") return;
-      [m.a,m.b].forEach(name=>{ if(!table[name]) table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, points:0, legsPlayed:new Set() }; });
+      [m.a,m.b].forEach(name=>{ if(!table[name]) table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, bonus:0, points:0, legsPlayed:new Set() }; });
       table[m.a].legsPlayed.add(leg.id); table[m.b].legsPlayed.add(leg.id);
       table[m.a].played++; table[m.a].pf+=m.scoreA; table[m.a].pa+=m.scoreB;
       table[m.b].played++; table[m.b].pf+=m.scoreB; table[m.b].pa+=m.scoreA;
       const aWon = m.winner===m.a;
       if(aWon){ table[m.a].won++; table[m.b].lost++; } else { table[m.b].won++; table[m.a].lost++; }
-      table[m.a].points += computeSoloCircuitMatchPoints(m.scoreA, m.scoreB, aWon);
-      table[m.b].points += computeSoloCircuitMatchPoints(m.scoreB, m.scoreA, !aWon);
+      const ptsA = computeSoloCircuitMatchPoints(m.scoreA, m.scoreB, aWon);
+      const ptsB = computeSoloCircuitMatchPoints(m.scoreB, m.scoreA, !aWon);
+      table[m.a].bonus += ptsA.bonus; table[m.a].points += ptsA.total;
+      table[m.b].bonus += ptsB.bonus; table[m.b].points += ptsB.total;
     });
   });
   return Object.values(table).map(r=>({...r, legsPlayed:r.legsPlayed.size})).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
@@ -4075,8 +4087,8 @@ function renderSoloCircuitLeg(){
     <div class="card">
       <p class="eyebrow">${leg.name} Standings</p>
       <div class="table-scroll"><table>
-        <tr><th>#</th><th>Player</th><th>P</th><th>W-L</th><th>+/-</th><th>PTS</th></tr>
-        ${standings.map((r,i)=>`<tr class="${i===0&&r.played?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.played?(r.pf-r.pa>0?"+":"")+(r.pf-r.pa):"&mdash;"}</td><td><b>${r.points}</b></td></tr>`).join("")}
+        <tr><th>#</th><th>Player</th><th>P</th><th>W-L</th><th>+/-</th><th>Bonus</th><th>PTS</th></tr>
+        ${standings.map((r,i)=>`<tr class="${i===0&&r.played?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.played?(r.pf-r.pa>0?"+":"")+(r.pf-r.pa):"&mdash;"}</td><td>${r.bonus}</td><td><b>${r.points}</b></td></tr>`).join("")}
       </table></div>
     </div>
     <div class="card">
@@ -4153,8 +4165,8 @@ function renderSoloCircuitEvent(){
       <p class="sub" style="margin-top:0;">Cumulative across every leg a player has taken part in.</p>
       ${!standings.length ? `<p class="help">No completed matches yet.</p>` : `
       <div class="table-scroll"><table>
-        <tr><th>#</th><th>Player</th><th>Legs</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th><th>PTS</th></tr>
-        ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.legsPlayed}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${Math.round((r.won/r.played)*100)}%</td><td>${r.pf-r.pa>0?"+":""}${r.pf-r.pa}</td><td><b>${r.points}</b></td></tr>`).join("")}
+        <tr><th>#</th><th>Player</th><th>Legs</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th><th>Bonus</th><th>PTS</th></tr>
+        ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.legsPlayed}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${Math.round((r.won/r.played)*100)}%</td><td>${r.pf-r.pa>0?"+":""}${r.pf-r.pa}</td><td>${r.bonus}</td><td><b>${r.points}</b></td></tr>`).join("")}
       </table></div>`}
     </div>
     <div class="card">
