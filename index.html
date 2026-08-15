@@ -435,6 +435,8 @@ let state = {
   soloCircuitEditingMatch: null,
   soloCircuitBulkImport: { rawText:"", legName:"Leg 1", venue:"", date:"", rejectedMerges:[], parsed:null },
   soloCircuitH2H: null,
+  soloCircuitList: null,
+  soloCircuitListLoading: false,
   typickleMatchStats: null,
   typickleForfeitMenuFor: null,
   typickleEditingMatch: null,
@@ -491,9 +493,16 @@ function generateLegMatches(playerNames){
     id:"m"+i, a:m.a.label, b:m.b.label, scoreA:null, scoreB:null, winner:null, status:"scheduled"
   }));
 }
+function computeSoloCircuitMatchPoints(myScore, oppScore, won){
+  if(won){
+    return oppScore===0 ? 6 : 5;
+  }
+  const margin = oppScore - myScore;
+  return margin<=2 ? 2 : 1;
+}
 function computeLegStandings(leg){
   const table = {};
-  leg.playerNames.forEach(name=>{ table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0 }; });
+  leg.playerNames.forEach(name=>{ table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, points:0 }; });
   leg.matches.forEach(m=>{
     if(m.status!=="complete") return;
     const rowA = table[m.a], rowB = table[m.b];
@@ -501,7 +510,10 @@ function computeLegStandings(leg){
     rowA.played++; rowB.played++;
     rowA.pf += m.scoreA; rowA.pa += m.scoreB;
     rowB.pf += m.scoreB; rowB.pa += m.scoreA;
-    if(m.winner===m.a){ rowA.won++; rowB.lost++; } else { rowB.won++; rowA.lost++; }
+    const aWon = m.winner===m.a;
+    if(aWon){ rowA.won++; rowB.lost++; } else { rowB.won++; rowA.lost++; }
+    rowA.points += computeSoloCircuitMatchPoints(m.scoreA, m.scoreB, aWon);
+    rowB.points += computeSoloCircuitMatchPoints(m.scoreB, m.scoreA, !aWon);
   });
   return Object.values(table).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
 }
@@ -585,11 +597,14 @@ function computeCircuitStandings(circuit){
   circuit.legs.forEach(leg=>{
     leg.matches.forEach(m=>{
       if(m.status!=="complete") return;
-      [m.a,m.b].forEach(name=>{ if(!table[name]) table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, legsPlayed:new Set() }; });
+      [m.a,m.b].forEach(name=>{ if(!table[name]) table[name] = { name, played:0, won:0, lost:0, pf:0, pa:0, points:0, legsPlayed:new Set() }; });
       table[m.a].legsPlayed.add(leg.id); table[m.b].legsPlayed.add(leg.id);
       table[m.a].played++; table[m.a].pf+=m.scoreA; table[m.a].pa+=m.scoreB;
       table[m.b].played++; table[m.b].pf+=m.scoreB; table[m.b].pa+=m.scoreA;
-      if(m.winner===m.a){ table[m.a].won++; table[m.b].lost++; } else { table[m.b].won++; table[m.a].lost++; }
+      const aWon = m.winner===m.a;
+      if(aWon){ table[m.a].won++; table[m.b].lost++; } else { table[m.b].won++; table[m.a].lost++; }
+      table[m.a].points += computeSoloCircuitMatchPoints(m.scoreA, m.scoreB, aWon);
+      table[m.b].points += computeSoloCircuitMatchPoints(m.scoreB, m.scoreA, !aWon);
     });
   });
   return Object.values(table).map(r=>({...r, legsPlayed:r.legsPlayed.size})).sort((a,b)=> b.won-a.won || (b.pf-b.pa)-(a.pf-a.pa));
@@ -2223,22 +2238,47 @@ async function typickleEnterEventCode(){
   render();
 }
 async function goSoloCircuitHome(){
-  let existingCode = null;
-  try{ existingCode = localStorage.getItem("solocircuit-current"); }catch(e){}
-  if(existingCode){
-    state.soloCircuitLoading = true; state.route = "solocircuit-event"; render();
-    const c = await loadSoloCircuit(existingCode);
-    state.soloCircuitLoading = false;
-    if(c){
-      state.soloCircuit = c;
-      state.soloCircuitCode = existingCode;
-      render();
-      return;
-    }
-    try{ localStorage.removeItem("solocircuit-current"); }catch(e){}
-  }
-  state.route = "solocircuit-setup";
+  state.route = "solocircuit-list";
   render();
+  await loadPublicSoloCircuits();
+  render();
+}
+async function solocircuitListOpen(code){
+  state.soloCircuitLoading = true; state.route = "solocircuit-event"; render();
+  const c = await loadSoloCircuit(code);
+  state.soloCircuitLoading = false;
+  if(!c){ showToast("Couldn't load that circuit"); render(); return; }
+  state.soloCircuit = c;
+  state.soloCircuitCode = code;
+  render();
+}
+async function solocircuitListDelete(key){
+  if(!state.adminUser) return;
+  if(!confirm("Delete this Solo Circuit permanently, including every leg and match in it? This can't be undone.")) return;
+  try{
+    const { error } = await sbClient.from("kv_store").delete().eq("key", key);
+    if(error){ showToast("Delete failed: "+error.message); return; }
+    haptic("strong");
+    showToast("Solo Circuit deleted");
+    await loadPublicSoloCircuits();
+    render();
+  }catch(e){
+    showToast("Delete failed");
+  }
+}
+async function loadPublicSoloCircuits(){
+  state.soloCircuitListLoading = true; render();
+  try{
+    const { data, error } = await sbClient.from("kv_store").select("key,value,updated_at").like("key", SOLO_CIRCUIT_PREFIX+"%").order("updated_at",{ascending:false}).limit(100);
+    if(error) throw error;
+    state.soloCircuitList = (data||[]).map(row=>{
+      let c=null; try{ c = JSON.parse(row.value); }catch(e){}
+      return { key: row.key, code: c?c.code:row.key.replace(SOLO_CIRCUIT_PREFIX,""), name: c?c.name:"(unreadable)", playerCount: c?c.players.length:0, legCount: c?c.legs.length:0 };
+    });
+  }catch(e){
+    state.soloCircuitList = [];
+  }
+  state.soloCircuitListLoading = false;
 }
 async function goTypickleHome(){
   let existingCode = null;
@@ -3233,6 +3273,7 @@ function render(){
   else if(state.route==="typickle-court") view.innerHTML = renderTypickleCourtQueue();
   else if(state.route==="typickle-all-courts") view.innerHTML = renderTypickleAllCourts();
   else if(state.route==="solocircuit-setup") view.innerHTML = renderSoloCircuitSetup();
+  else if(state.route==="solocircuit-list") view.innerHTML = renderSoloCircuitList();
   else if(state.route==="solocircuit-event") view.innerHTML = renderSoloCircuitEvent();
   else if(state.route==="solocircuit-leg") view.innerHTML = renderSoloCircuitLeg();
   else if(state.route==="solocircuit-bulk") view.innerHTML = renderSoloCircuitBulkImport();
@@ -4034,8 +4075,8 @@ function renderSoloCircuitLeg(){
     <div class="card">
       <p class="eyebrow">${leg.name} Standings</p>
       <div class="table-scroll"><table>
-        <tr><th>#</th><th>Player</th><th>P</th><th>W-L</th><th>+/-</th></tr>
-        ${standings.map((r,i)=>`<tr class="${i===0&&r.played?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.played?(r.pf-r.pa>0?"+":"")+(r.pf-r.pa):"&mdash;"}</td></tr>`).join("")}
+        <tr><th>#</th><th>Player</th><th>P</th><th>W-L</th><th>+/-</th><th>PTS</th></tr>
+        ${standings.map((r,i)=>`<tr class="${i===0&&r.played?"leader":""}"><td>${i+1}</td><td>${r.name}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${r.played?(r.pf-r.pa>0?"+":"")+(r.pf-r.pa):"&mdash;"}</td><td><b>${r.points}</b></td></tr>`).join("")}
       </table></div>
     </div>
     <div class="card">
@@ -4112,8 +4153,8 @@ function renderSoloCircuitEvent(){
       <p class="sub" style="margin-top:0;">Cumulative across every leg a player has taken part in.</p>
       ${!standings.length ? `<p class="help">No completed matches yet.</p>` : `
       <div class="table-scroll"><table>
-        <tr><th>#</th><th>Player</th><th>Legs</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th></tr>
-        ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.legsPlayed}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${Math.round((r.won/r.played)*100)}%</td><td>${r.pf-r.pa>0?"+":""}${r.pf-r.pa}</td></tr>`).join("")}
+        <tr><th>#</th><th>Player</th><th>Legs</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th><th>PTS</th></tr>
+        ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.legsPlayed}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${Math.round((r.won/r.played)*100)}%</td><td>${r.pf-r.pa>0?"+":""}${r.pf-r.pa}</td><td><b>${r.points}</b></td></tr>`).join("")}
       </table></div>`}
     </div>
     <div class="card">
@@ -4163,23 +4204,39 @@ function renderSoloCircuitEvent(){
       </div>`;
     }).join("")}`;
 }
+function renderSoloCircuitList(){
+  if(state.soloCircuitListLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading circuits\u2026</div>`;
+  const list = state.soloCircuitList || [];
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back to Home</button>
+    <div class="card" style="background:var(--kitchen);">
+      <p class="eyebrow">Solo Circuits</p>
+      <h2>All Circuits</h2>
+      <p class="sub">Open one to see standings, head-to-head, and upcoming fixtures &mdash; no code needed.</p>
+    </div>
+    ${state.adminUser ? `
+    <div class="card">
+      <button class="btn btn-ink btn-wide" data-action="go-solocircuit-setup">+ Create New Circuit</button>
+    </div>` : ""}
+    ${!list.length ? `<div class="card"><p class="help">No Solo Circuits yet.</p></div>` : list.map(c=>`
+      <div class="match-card">
+        <div style="flex:2; min-width:180px; cursor:pointer;" data-action="solocircuit-list-open" data-code="${c.code}">
+          <div style="font-weight:800;">${c.name}</div>
+          <div class="help" style="margin:2px 0 0;">${c.playerCount} player${c.playerCount===1?"":"s"} &middot; ${c.legCount} leg${c.legCount===1?"":"s"}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" data-action="solocircuit-list-open" data-code="${c.code}">View</button>
+        ${state.adminUser ? `<button class="remove-btn" data-action="solocircuit-list-delete" data-key="${c.key}">Delete</button>` : ""}
+      </div>`).join("")}`;
+}
 function renderSoloCircuitSetup(){
   if(state.soloCircuitLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
   const f = state.soloCircuitSetup;
   return `
-    <button class="back-link" data-action="go-home">&larr; Back</button>
-    <div class="card" style="border-color:var(--court);">
-      <p class="eyebrow">Already running a Solo Circuit?</p>
-      <h2>Enter its code</h2>
-      <div class="join-row">
-        <input type="text" id="solocircuit-enter-code-input" maxlength="6" placeholder="Circuit code">
-        <button class="btn btn-ink" data-action="solocircuit-enter-code">Open</button>
-      </div>
-    </div>
+    <button class="back-link" data-action="go-solocircuit">&larr; Back to All Circuits</button>
     ${!state.adminUser ? `
     <div class="card">
       <p class="eyebrow">Setting up a new circuit</p>
-      <p class="sub">Creating and managing a Solo Circuit is an admin action. Ask your organizer to set one up, then use the code above to view standings and head-to-head \u2014 no login needed for that.</p>
+      <p class="sub">Creating and managing a Solo Circuit is an admin action. Ask your organizer to set one up \u2014 anyone can view standings and head-to-head once it exists, no login needed for that.</p>
     </div>` : `
     <div class="card">
       <p class="eyebrow">Solo Circuit</p>
@@ -5501,6 +5558,9 @@ function bindEvents(){
     else if(action==="go-livescore") await openLiveScoring();
     else if(action==="go-typickle-setup") await goTypickleHome();
     else if(action==="go-solocircuit") await goSoloCircuitHome();
+    else if(action==="go-solocircuit-setup") { state.route="solocircuit-setup"; render(); }
+    else if(action==="solocircuit-list-open") await solocircuitListOpen(el.dataset.code);
+    else if(action==="solocircuit-list-delete") await solocircuitListDelete(el.dataset.key);
     else if(action==="solocircuit-add-player") solocircuitAddPlayer();
     else if(action==="solocircuit-remove-player") solocircuitRemovePlayer(+el.dataset.idx);
     else if(action==="solocircuit-enter-code") await solocircuitEnterCode();
