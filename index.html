@@ -49,6 +49,7 @@
     padding:22px 4px 14px;
   }
   .brand{display:flex; align-items:center; gap:10px; cursor:pointer; min-width:0;}
+  .brand-logo{height:42px; width:auto; display:block;}
   .brand .dot{width:14px; height:14px; border-radius:50%; background:var(--ball); border:2px solid var(--ink); flex:0 0 auto;}
   .brand span{font-family:'Oswald',sans-serif; font-weight:600; font-size:22px; letter-spacing:0.03em; text-transform:uppercase;}
   .brand > div{min-width:0;}
@@ -58,6 +59,7 @@
   .powered-by-label{font-size:9.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); font-weight:700;}
   .powered-by-logo{height:38px; width:auto; display:block; object-fit:contain;}
   @media(max-width:520px){
+    .brand-logo{height:32px;}
     .powered-by-logo{height:30px;}
     .powered-by-label{font-size:8.5px;}
   }
@@ -3310,8 +3312,7 @@ function render(){
   app.innerHTML = `
     <div class="topbar">
       <div class="brand" data-action="go-home">
-        <div class="dot"></div>
-        <div><span>Kitchen Line</span><small>A free platform to organize every pickleball session</small></div>
+        <img src="/kitchen-line-logo.png" alt="Kitchen Line" class="brand-logo">
       </div>
       <div class="topbar-right">
         <div class="powered-by" title="Powered by Typickle Events">
