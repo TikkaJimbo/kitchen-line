@@ -309,9 +309,9 @@
   .pf-title{color:#fff; font-family:'Oswald',sans-serif; font-weight:600; letter-spacing:0.02em; text-align:center; font-size:22px; margin:0 0 6px;}
   .pf-sub{color:#B8C4B0; text-align:center; font-size:13px; margin:0;}
   .pf-card{background:#fff; border:2px solid var(--pf-neon); border-radius:14px; padding:16px; margin-bottom:14px;}
-  .pf-card .eyebrow{color:var(--pf-neon-dim);}
   .pf-btn{background:var(--pf-neon); color:var(--pf-black); border:none; border-radius:10px; padding:12px 18px; font-weight:800; font-size:14px; cursor:pointer; text-align:center; display:block; width:100%;}
   .pf-btn-outline{background:transparent; color:var(--pf-neon); border:2px solid var(--pf-neon); border-radius:10px; padding:10px 16px; font-weight:800; font-size:13px; cursor:pointer;}
+  .pf-btn-card-outline{background:transparent; color:#000; border:2px solid var(--pf-neon-dim); border-radius:10px; padding:10px 16px; font-weight:800; font-size:13px; cursor:pointer;}
   .pf-back{color:var(--pf-neon); background:none; border:none; font-weight:800; font-size:13px; cursor:pointer; padding:0; margin-bottom:14px; display:inline-flex; align-items:center; gap:5px;}
   .pf-tabs{display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:14px; padding-bottom:2px;}
   .pf-tab{flex:0 0 auto; padding:9px 16px; border-radius:999px; border:2px solid var(--pf-neon); background:transparent; color:var(--pf-neon); font-weight:800; font-size:13px; cursor:pointer; white-space:nowrap;}
@@ -2032,6 +2032,24 @@ async function solocircuitSaveMatch(matchId){
   }
   state.soloCircuitEditingMatch = null;
   haptic("medium");
+  render();
+}
+async function solocircuitRemoveCircuitPlayer(name){
+  if(!state.adminUser){ showToast("Only admins can manage Pickle Force Tournaments"); return; }
+  const c = state.soloCircuit;
+  if(!confirm(`Remove ${name} from this circuit? They won't be selectable for future legs, but their existing results and standings stay exactly as they are.`)) return;
+  c.players = c.players.filter(p=>p.name!==name);
+  const sel = state.soloCircuitLegSetup.selectedPlayers;
+  const idx = sel.indexOf(name);
+  if(idx>=0) sel.splice(idx,1);
+  try{
+    await saveSoloCircuit(c.code, c);
+  }catch(e){
+    showToast("\u26a0\ufe0f Couldn't save \u2014 check your connection");
+    return;
+  }
+  haptic("medium");
+  showToast(`${name} removed from the circuit`);
   render();
 }
 async function solocircuitAddNewLegPlayer(){
@@ -4283,8 +4301,15 @@ function renderSoloCircuitEvent(){
     </div>
     ${state.adminUser ? `
     <div class="pf-card">
+      <p class="eyebrow">Circuit Players</p>
+      <p class="sub" style="margin-top:0;">Removing a player only affects future legs \u2014 their existing results and standings stay intact.</p>
+      <div class="chip-group">
+        ${c.players.map(p=>`<span class="chip active" data-action="solocircuit-remove-circuit-player" data-name="${p.name}" style="cursor:pointer;">${p.name}${p.dupr?` (${p.dupr})`:""} &times;</span>`).join("")}
+      </div>
+    </div>
+    <div class="pf-card">
       <p class="eyebrow">Add a Leg</p>
-      <button class="pf-btn-outline" data-action="go-solocircuit-bulk" style="margin-bottom:12px; width:100%;">Bulk-import results instead</button>
+      <button class="pf-btn-card-outline" data-action="go-solocircuit-bulk" style="margin-bottom:12px; width:100%;">Bulk-import results instead</button>
       <div class="row">
         <div class="field"><label>Leg name</label><input type="text" id="leg-name-input" placeholder="e.g. Leg ${c.legs.length+1}"></div>
         <div class="field"><label>Venue</label><input type="text" id="leg-venue-input" placeholder="e.g. Colombo Courts"></div>
@@ -4336,10 +4361,7 @@ function renderSoloCircuitEvent(){
     <button class="back-link" data-action="go-home">&larr; Back to Home</button>
     <div class="pf-page">
       <div class="pf-header">
-        <img class="pf-badge" src="/pickleforce-badge.png" alt="Pickle Force">
         <img class="pf-wordmark" src="/soloCircuit-wordmark.png" alt="Solo Circuit by Pickle Force">
-        <p class="pf-eyebrow">${c.name}</p>
-        <p class="pf-sub">Code: <span class="pf-code-pill">${c.code}</span></p>
       </div>
       ${tabBar}
       ${content}
@@ -4399,7 +4421,7 @@ function renderSoloCircuitSetup(){
         </div>
         ${f.players.length ? `<div class="chip-group">${f.players.map((p,i)=>`<span class="chip active" data-action="solocircuit-remove-player" data-idx="${i}" style="cursor:pointer;">${p.name}${p.dupr?` (${p.dupr})`:""} &times;</span>`).join("")}</div>` : `<p class="help">No players added yet.</p>`}
         <button class="pf-btn" data-action="solocircuit-create" ${f.players.length<2?"disabled":""} style="margin-top:14px;">Create Circuit</button>
-        <button class="pf-btn-outline" data-action="go-solocircuit-bulk" style="margin-top:8px; width:100%;">Or bulk-import a leg's results instead</button>
+        <button class="pf-btn-card-outline" data-action="go-solocircuit-bulk" style="margin-top:8px; width:100%;">Or bulk-import a leg's results instead</button>
       </div>`}
     </div>`;
 }
@@ -5712,6 +5734,7 @@ function bindEvents(){
     else if(action==="solocircuit-enter-code") await solocircuitEnterCode();
     else if(action==="solocircuit-create") await createSoloCircuit();
     else if(action==="solocircuit-toggle-leg-player") solocircuitToggleLegPlayer(el.dataset.name);
+    else if(action==="solocircuit-remove-circuit-player") await solocircuitRemoveCircuitPlayer(el.dataset.name);
     else if(action==="solocircuit-add-new-leg-player") await solocircuitAddNewLegPlayer();
     else if(action==="solocircuit-create-leg") await createSoloCircuitLeg();
     else if(action==="go-solocircuit-event") { state.route="solocircuit-event"; render(); }
