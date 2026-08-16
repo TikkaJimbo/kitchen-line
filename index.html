@@ -287,6 +287,17 @@
   .back-link{background:none; border:none; color:var(--court); font-weight:800; font-size:13px; cursor:pointer; padding:0; margin-bottom:14px; display:inline-flex; align-items:center; gap:5px;}
   .footer-note{text-align:center; color:var(--muted); font-size:11.5px; margin-top:30px; line-height:1.6; font-weight:600;}
   .table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .col-xnarrow{width:30px; text-align:center; white-space:nowrap;}
+  .col-narrow{width:40px; text-align:center; white-space:nowrap;}
+  .col-wl{width:50px; text-align:center; white-space:nowrap;}
+  .col-pts{width:44px; text-align:center; white-space:nowrap;}
+  .col-player{min-width:76px; white-space:nowrap;}
+  th.sortable{cursor:pointer; user-select:none; white-space:nowrap;}
+  th.sortable .sort-arrow{font-size:9px; opacity:0.55; margin-left:2px;}
+  th.sortable.active-sort{color:var(--court);}
+  .sc-tabs{display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:14px; padding-bottom:2px;}
+  .sc-tab{flex:0 0 auto; padding:9px 16px; border-radius:999px; border:2px solid var(--ink); background:#fff; font-weight:800; font-size:13px; cursor:pointer; white-space:nowrap;}
+  .sc-tab.active{background:var(--court); border-color:var(--court); color:#fff;}
   .milestone-row{margin-bottom:16px;}
   .milestone-row:last-child{margin-bottom:0;}
   .milestone-label{font-weight:800; font-size:14.5px; margin-bottom:4px;}
@@ -307,8 +318,8 @@
     .stat-tile{padding:10px 8px;}
     .stat-tile .num{font-size:19px;}
     .highlight-pair{grid-template-columns:1fr;}
-    table{font-size:12.5px;}
-    th, td{padding:6px 5px;}
+    table{font-size:11.5px;}
+    th, td{padding:5px 3px;}
     .row{gap:10px;}
     .row > .field{min-width:130px;}
     .player-add-row{flex-wrap:wrap;}
@@ -437,6 +448,8 @@ let state = {
   soloCircuitH2H: null,
   soloCircuitList: null,
   soloCircuitListLoading: false,
+  soloCircuitViewTab: "overall",
+  soloCircuitSort: { key: "points", dir: "desc" },
   typickleMatchStats: null,
   typickleForfeitMenuFor: null,
   typickleEditingMatch: null,
@@ -4148,26 +4161,78 @@ function renderSoloCircuitH2HResult(){
         </div>`).join("")}
     </div>`;
 }
+function sortSoloCircuitRows(rows, sortKey, sortDir){
+  const valueOf = (r,key) => {
+    if(key==="name") return r.name.toLowerCase();
+    if(key==="winPct") return r.played ? r.won/r.played : -1;
+    if(key==="diff") return r.pf-r.pa;
+    if(key==="wl") return r.won;
+    return r[key];
+  };
+  const sorted = rows.slice().sort((a,b)=>{
+    const av = valueOf(a,sortKey), bv = valueOf(b,sortKey);
+    if(typeof av==="string") return sortDir==="desc" ? bv.localeCompare(av) : av.localeCompare(bv);
+    return sortDir==="desc" ? bv-av : av-bv;
+  });
+  return sorted;
+}
+function solocircuitSetSort(key){
+  const s = state.soloCircuitSort;
+  if(s.key===key) s.dir = s.dir==="desc" ? "asc" : "desc";
+  else { s.key = key; s.dir = "desc"; }
+  render();
+}
+function renderSoloCircuitStandingsTable(rawRows, isOverall){
+  const s = state.soloCircuitSort;
+  const rows = sortSoloCircuitRows(rawRows, s.key, s.dir);
+  const arrow = key => s.key===key ? `<span class="sort-arrow">${s.dir==="desc"?"\u25bc":"\u25b2"}</span>` : "";
+  const th = (key, label, cls) => `<th class="sortable ${cls||""} ${s.key===key?"active-sort":""}" data-action="solocircuit-sort" data-key="${key}">${label}${arrow(key)}</th>`;
+  return `
+    <div class="table-scroll"><table>
+      <tr>
+        <th class="col-xnarrow">#</th>
+        ${th("name","Player","col-player")}
+        ${isOverall ? th("legsPlayed","Legs","col-narrow") : ""}
+        ${th("played","P","col-narrow")}
+        ${th("wl","W-L","col-wl")}
+        ${isOverall ? th("winPct","Win%","col-narrow") : ""}
+        ${th("diff","+/-","col-narrow")}
+        ${th("bonus","Bonus","col-xnarrow")}
+        ${th("points","PTS","col-pts")}
+      </tr>
+      ${rows.map((r,i)=>`<tr class="${!isOverall && i===0 && r.played ? "leader" : ""}">
+        <td class="col-xnarrow">${i+1}</td>
+        <td class="col-player">${r.name}</td>
+        ${isOverall ? `<td class="col-narrow">${r.legsPlayed}</td>` : ""}
+        <td class="col-narrow">${r.played}</td>
+        <td class="col-wl">${r.won}-${r.lost}</td>
+        ${isOverall ? `<td class="col-narrow">${r.played?Math.round((r.won/r.played)*100)+"%":"&mdash;"}</td>` : ""}
+        <td class="col-narrow">${r.played?(r.pf-r.pa>0?"+":"")+(r.pf-r.pa):"&mdash;"}</td>
+        <td class="col-xnarrow">${r.bonus}</td>
+        <td class="col-pts"><b>${r.points}</b></td>
+      </tr>`).join("")}
+    </table></div>`;
+}
 function renderSoloCircuitEvent(){
   if(state.soloCircuitLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
   const c = state.soloCircuit;
   if(!c) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="card"><h2>Circuit not found</h2></div>`;
-  const standings = computeCircuitStandings(c);
-  return `
-    <button class="back-link" data-action="go-home">&larr; Back to Home</button>
-    <div class="card" style="background:var(--court); border-color:var(--ink);">
-      <p class="eyebrow" style="color:var(--ball);">Solo Circuit</p>
-      <h2 style="color:#fff;">${c.name}</h2>
-      <p class="sub" style="color:#DCEDEA;">Circuit Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${c.code}</b></p>
-    </div>
+  const tab = state.soloCircuitViewTab;
+
+  const tabBar = `
+    <div class="sc-tabs">
+      <div class="sc-tab ${tab==="overall"?"active":""}" data-action="solocircuit-set-tab" data-tab="overall">Overall</div>
+      ${c.legs.map(leg=>`<div class="sc-tab ${tab===leg.id?"active":""}" data-action="solocircuit-set-tab" data-tab="${leg.id}">${leg.name}</div>`).join("")}
+    </div>`;
+
+  let content;
+  if(tab==="overall" || !c.legs.find(l=>l.id===tab)){
+    const standings = computeCircuitStandings(c);
+    content = `
     <div class="card">
       <p class="eyebrow">Circuit Standings</p>
       <p class="sub" style="margin-top:0;">Cumulative across every leg a player has taken part in.</p>
-      ${!standings.length ? `<p class="help">No completed matches yet.</p>` : `
-      <div class="table-scroll"><table>
-        <tr><th>#</th><th>Player</th><th>Legs</th><th>P</th><th>W-L</th><th>Win%</th><th>+/-</th><th>Bonus</th><th>PTS</th></tr>
-        ${standings.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.legsPlayed}</td><td>${r.played}</td><td>${r.won}-${r.lost}</td><td>${Math.round((r.won/r.played)*100)}%</td><td>${r.pf-r.pa>0?"+":""}${r.pf-r.pa}</td><td>${r.bonus}</td><td><b>${r.points}</b></td></tr>`).join("")}
-      </table></div>`}
+      ${!standings.length ? `<p class="help">No completed matches yet.</p>` : renderSoloCircuitStandingsTable(standings, true)}
     </div>
     <div class="card">
       <p class="eyebrow">Head-to-Head</p>
@@ -4190,7 +4255,7 @@ function renderSoloCircuitEvent(){
       <p class="eyebrow">Add a Leg</p>
       <button class="btn btn-outline btn-sm" data-action="go-solocircuit-bulk" style="margin-bottom:12px;">Bulk-import results instead</button>
       <div class="row">
-        <div class="field"><label>Leg name</label><input type="text" id="leg-name-input" placeholder="e.g. Leg 2"></div>
+        <div class="field"><label>Leg name</label><input type="text" id="leg-name-input" placeholder="e.g. Leg ${c.legs.length+1}"></div>
         <div class="field"><label>Venue</label><input type="text" id="leg-venue-input" placeholder="e.g. Colombo Courts"></div>
       </div>
       <div class="field"><label>Date</label><input type="date" id="leg-date-input"></div>
@@ -4204,17 +4269,47 @@ function renderSoloCircuitEvent(){
         <button class="btn btn-outline btn-sm" data-action="solocircuit-add-new-leg-player" style="height:44px;">Add to Circuit</button>
       </div>
       <button class="btn btn-ink btn-wide" data-action="solocircuit-create-leg" style="margin-top:14px;" ${state.soloCircuitLegSetup.selectedPlayers.length<2?"disabled":""}>Create Leg &amp; Generate Matches</button>
-    </div>` : ""}
-    ${c.legs.map(leg=>{
-      const legStandings = computeLegStandings(leg);
-      const completedCount = leg.matches.filter(m=>m.status==="complete").length;
-      return `
-      <div class="card" data-action="solocircuit-open-leg" data-leg="${leg.id}" style="cursor:pointer;">
-        <p class="eyebrow">${leg.name}</p>
-        <p class="sub" style="margin-top:0;">${leg.venue||"No venue set"} ${leg.date?"&middot; "+leg.date:""} &middot; ${completedCount}/${leg.matches.length} matches entered</p>
-        ${legStandings.length && legStandings[0].played ? `<p class="help">Leading: <b>${legStandings[0].name}</b> (${legStandings[0].won}-${legStandings[0].lost})</p>` : ""}
-      </div>`;
-    }).join("")}`;
+    </div>` : ""}`;
+  } else {
+    const leg = c.legs.find(l=>l.id===tab);
+    const standings = computeLegStandings(leg);
+    content = `
+    <div class="card">
+      <p class="eyebrow">${leg.name}</p>
+      <p class="sub" style="margin-top:0;">${leg.venue||"No venue set"} ${leg.date?"&middot; "+leg.date:""}</p>
+      ${renderSoloCircuitStandingsTable(standings, false)}
+    </div>
+    <div class="card">
+      <p class="eyebrow">Matches</p>
+      ${leg.matches.map(m=>`
+        <div class="match-card">
+          <div class="side ${m.status==="complete"&&m.winner===m.a?"win":""}">${m.a}</div>
+          <div class="side" style="text-align:center; flex:0; min-width:60px; font-weight:800;">${m.status==="complete" ? `${m.scoreA}-${m.scoreB}` : "&mdash;"}</div>
+          <div class="side ${m.status==="complete"&&m.winner===m.b?"win":""}" style="text-align:right;">${m.b}</div>
+          ${state.adminUser ? `<button class="btn ${m.status==='complete'?'btn-outline':'btn-ink'} btn-sm" data-action="solocircuit-edit-match" data-match="${m.id}">${m.status==="complete"?"Edit Score":"Enter Score"}</button>` : ""}
+        </div>
+        ${state.soloCircuitEditingMatch===m.id && state.adminUser ? `
+        <div class="match-card" style="background:var(--court); flex-wrap:wrap;">
+          <div class="field" style="min-width:110px;"><label style="color:#DCEDEA;">${m.a}</label><input type="number" min="0" id="sc-scoreA-${m.id}" value="${m.scoreA!=null?m.scoreA:''}"></div>
+          <div class="field" style="min-width:110px;"><label style="color:#DCEDEA;">${m.b}</label><input type="number" min="0" id="sc-scoreB-${m.id}" value="${m.scoreB!=null?m.scoreB:''}"></div>
+          <div style="flex:1 1 100%; display:flex; gap:8px; margin-top:6px;">
+            <button class="btn btn-ink btn-sm" data-action="solocircuit-save-match" data-match="${m.id}">Save</button>
+            <button class="btn btn-outline btn-sm" data-action="solocircuit-cancel-edit" style="border-color:#fff; color:#fff;">Cancel</button>
+          </div>
+        </div>` : ""}
+      `).join("")}
+    </div>`;
+  }
+
+  return `
+    <button class="back-link" data-action="go-home">&larr; Back to Home</button>
+    <div class="card" style="background:var(--court); border-color:var(--ink);">
+      <p class="eyebrow" style="color:var(--ball);">Solo Circuit</p>
+      <h2 style="color:#fff;">${c.name}</h2>
+      <p class="sub" style="color:#DCEDEA;">Circuit Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${c.code}</b></p>
+    </div>
+    ${tabBar}
+    ${content}`;
 }
 function renderSoloCircuitList(){
   if(state.soloCircuitListLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading circuits\u2026</div>`;
@@ -5580,8 +5675,9 @@ function bindEvents(){
     else if(action==="solocircuit-toggle-leg-player") solocircuitToggleLegPlayer(el.dataset.name);
     else if(action==="solocircuit-add-new-leg-player") await solocircuitAddNewLegPlayer();
     else if(action==="solocircuit-create-leg") await createSoloCircuitLeg();
-    else if(action==="solocircuit-open-leg") await openSoloCircuitLeg(el.dataset.leg);
     else if(action==="go-solocircuit-event") { state.route="solocircuit-event"; render(); }
+    else if(action==="solocircuit-set-tab") { state.soloCircuitViewTab = el.dataset.tab; render(); }
+    else if(action==="solocircuit-sort") solocircuitSetSort(el.dataset.key);
     else if(action==="solocircuit-edit-match") solocircuitEditMatch(el.dataset.match);
     else if(action==="solocircuit-cancel-edit") solocircuitCancelEdit();
     else if(action==="solocircuit-save-match") await solocircuitSaveMatch(el.dataset.match);
