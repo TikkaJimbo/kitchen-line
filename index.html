@@ -23,6 +23,9 @@
     --kitchen:#F2EFE4;
     --paper:#FBF8F0;
     --ball:#D7E639;
+    --pf-black:#080808;
+    --pf-neon:#B4E614;
+    --pf-neon-dim:#8CBE00;
     --ball-dark:#B9C920;
     --line:#E4DFCB;
     --red:#C1502E;
@@ -298,6 +301,29 @@
   .sc-tabs{display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:14px; padding-bottom:2px;}
   .sc-tab{flex:0 0 auto; padding:9px 16px; border-radius:999px; border:2px solid var(--ink); background:#fff; font-weight:800; font-size:13px; cursor:pointer; white-space:nowrap;}
   .sc-tab.active{background:var(--court); border-color:var(--court); color:#fff;}
+  .pf-page{background:var(--pf-black); border-radius:20px; padding:22px 18px 26px; margin-bottom:20px;}
+  .pf-header{text-align:center; margin-bottom:20px;}
+  .pf-badge{max-width:110px; height:auto; display:block; margin:0 auto 10px;}
+  .pf-wordmark{max-width:260px; height:auto; display:block; margin:0 auto 14px;}
+  .pf-eyebrow{color:var(--pf-neon); font-weight:800; font-size:11px; letter-spacing:0.12em; text-transform:uppercase; text-align:center; margin-bottom:4px;}
+  .pf-title{color:#fff; font-family:'Oswald',sans-serif; font-weight:600; letter-spacing:0.02em; text-align:center; font-size:22px; margin:0 0 6px;}
+  .pf-sub{color:#B8C4B0; text-align:center; font-size:13px; margin:0;}
+  .pf-card{background:#fff; border:2px solid var(--pf-neon); border-radius:14px; padding:16px; margin-bottom:14px;}
+  .pf-card .eyebrow{color:var(--pf-neon-dim);}
+  .pf-btn{background:var(--pf-neon); color:var(--pf-black); border:none; border-radius:10px; padding:12px 18px; font-weight:800; font-size:14px; cursor:pointer; text-align:center; display:block; width:100%;}
+  .pf-btn-outline{background:transparent; color:var(--pf-neon); border:2px solid var(--pf-neon); border-radius:10px; padding:10px 16px; font-weight:800; font-size:13px; cursor:pointer;}
+  .pf-back{color:var(--pf-neon); background:none; border:none; font-weight:800; font-size:13px; cursor:pointer; padding:0; margin-bottom:14px; display:inline-flex; align-items:center; gap:5px;}
+  .pf-tabs{display:flex; gap:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:14px; padding-bottom:2px;}
+  .pf-tab{flex:0 0 auto; padding:9px 16px; border-radius:999px; border:2px solid var(--pf-neon); background:transparent; color:var(--pf-neon); font-weight:800; font-size:13px; cursor:pointer; white-space:nowrap;}
+  .pf-tab.active{background:var(--pf-neon); color:var(--pf-black); border-color:var(--pf-neon);}
+  .pf-listrow{background:#fff; border-radius:12px; padding:14px 16px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+  .pf-code-pill{color:var(--pf-neon); font-weight:800; letter-spacing:0.08em;}
+  @media(max-width:520px){
+    .pf-page{padding:18px 12px 20px; border-radius:16px;}
+    .pf-badge{max-width:82px;}
+    .pf-wordmark{max-width:210px;}
+    .pf-title{font-size:19px;}
+  }
   .milestone-row{margin-bottom:16px;}
   .milestone-row:last-child{margin-bottom:0;}
   .milestone-label{font-weight:800; font-size:14.5px; margin-bottom:4px;}
@@ -1941,7 +1967,7 @@ function solocircuitToggleMerge(name){
   render();
 }
 async function solocircuitConfirmBulk(){
-  if(!state.adminUser){ showToast("Only admins can manage the Solo Circuit"); return; }
+  if(!state.adminUser){ showToast("Only admins can manage Pickle Force Tournaments"); return; }
   const bi = state.soloCircuitBulkImport;
   const p = bi.parsed;
   if(!p || p.errors.length) return;
@@ -1987,7 +2013,7 @@ function solocircuitCancelEdit(){
   render();
 }
 async function solocircuitSaveMatch(matchId){
-  if(!state.adminUser){ showToast("Only admins can manage the Solo Circuit"); return; }
+  if(!state.adminUser){ showToast("Only admins can manage Pickle Force Tournaments"); return; }
   const c = state.soloCircuit;
   const leg = c.legs.find(l=>l.id===state.soloCircuitActiveLegId);
   const m = leg.matches.find(x=>x.id===matchId);
@@ -2009,7 +2035,7 @@ async function solocircuitSaveMatch(matchId){
   render();
 }
 async function solocircuitAddNewLegPlayer(){
-  if(!state.adminUser){ showToast("Only admins can manage the Solo Circuit"); return; }
+  if(!state.adminUser){ showToast("Only admins can manage Pickle Force Tournaments"); return; }
   const c = state.soloCircuit;
   const input = document.getElementById("solocircuit-new-leg-player");
   const name = input.value.trim();
@@ -2036,7 +2062,7 @@ function solocircuitToggleLegPlayer(name){
   render();
 }
 async function createSoloCircuitLeg(){
-  if(!state.adminUser){ showToast("Only admins can manage the Solo Circuit"); return; }
+  if(!state.adminUser){ showToast("Only admins can manage Pickle Force Tournaments"); return; }
   const c = state.soloCircuit;
   const name = document.getElementById("leg-name-input").value.trim() || `Leg ${c.legs.length+1}`;
   const venue = document.getElementById("leg-venue-input").value.trim();
@@ -2099,7 +2125,7 @@ async function solocircuitEnterCode(){
   render();
 }
 async function createSoloCircuit(){
-  if(!state.adminUser){ showToast("Only admins can manage the Solo Circuit"); return; }
+  if(!state.adminUser){ showToast("Only admins can manage Pickle Force Tournaments"); return; }
   const f = state.soloCircuitSetup;
   f.name = document.getElementById("solocircuit-name").value.trim() || "Solo Circuit";
   if(f.players.length<2){ showToast("Add at least 2 players"); return; }
@@ -3359,7 +3385,7 @@ function renderHome(){
       <div class="chip-group">
         <button class="btn btn-outline btn-sm" data-action="go-livescore" style="border-color:var(--court); color:var(--court);">🏓 Live Scoring (Preview)</button>
         <button class="btn btn-outline btn-sm" data-action="go-typickle-setup" style="border-color:var(--ball); color:var(--ink); background:rgba(215,230,57,0.2);">🏆 Typickle Tournament 1.0</button>
-        <button class="btn btn-outline btn-sm" data-action="go-solocircuit" style="border-color:var(--kitchen); color:var(--ink); background:rgba(14,92,85,0.08);">🎯 Solo Circuit</button>
+        <button class="btn btn-outline btn-sm" data-action="go-solocircuit" style="border-color:var(--pf-black); color:var(--pf-black); background:var(--pf-neon);">\ud83c\udfc6 Pickle Force Tournaments</button>
       </div>
       <div class="join-row" style="margin-top:12px;">
         <input type="text" id="typickleViewerCodeInput" maxlength="6" placeholder="Event code e.g. 7QXPB">
@@ -4047,24 +4073,29 @@ function renderSoloCircuitBulkImport(){
   if(!state.adminUser) return `<button class="back-link" data-action="${c?'go-solocircuit-event':'go-home'}">&larr; Back</button><div class="card"><h2>Admin access required</h2><p class="sub">Only admins can import results.</p></div>`;
   return `
     <button class="back-link" data-action="${c?'go-solocircuit-event':'go-home'}">&larr; Back</button>
-    <div class="card">
-      <p class="eyebrow">Bulk Import ${c ? "\u2014 "+c.name : "\u2014 New Circuit"}</p>
-      <h2>Paste match results</h2>
-      <p class="sub">Format: "1. PlayerA vs PlayerB - Winner Score-Score", one per line. Handles messy pasting \u2014 merged lines, missing spaces, minor typos.</p>
-      <div class="row">
-        <div class="field"><label>Leg name</label><input type="text" id="bulk-leg-name" value="${bi.legName}"></div>
-        <div class="field"><label>Venue</label><input type="text" id="bulk-leg-venue" value="${bi.venue}"></div>
+    <div class="pf-page">
+      <div class="pf-header">
+        <img class="pf-badge" src="/pickleforce-badge.png" alt="Pickle Force">
+        <p class="pf-eyebrow">Bulk Import ${c ? "\u2014 "+c.name : "\u2014 New Circuit"}</p>
+        <h2 class="pf-title">Paste Match Results</h2>
       </div>
-      <div class="field"><label>Date</label><input type="date" id="bulk-leg-date" value="${bi.date}"></div>
-      <div class="field"><label>Paste results here</label><textarea id="bulk-leg-text" rows="10" style="width:100%; font-family:monospace; font-size:13px; padding:10px; border:2px solid var(--ink); border-radius:10px;">${bi.rawText}</textarea></div>
-      <button class="btn btn-ink btn-wide" data-action="solocircuit-parse-bulk" style="margin-top:10px;">Parse Results</button>
-    </div>
-    ${bi.parsed ? renderSoloCircuitBulkPreview(bi) : ""}`;
+      <div class="pf-card">
+        <p class="sub" style="margin-top:0;">Format: "1. PlayerA vs PlayerB - Winner Score-Score", one per line. Handles messy pasting \u2014 merged lines, missing spaces, minor typos.</p>
+        <div class="row">
+          <div class="field"><label>Leg name</label><input type="text" id="bulk-leg-name" value="${bi.legName}"></div>
+          <div class="field"><label>Venue</label><input type="text" id="bulk-leg-venue" value="${bi.venue}"></div>
+        </div>
+        <div class="field"><label>Date</label><input type="date" id="bulk-leg-date" value="${bi.date}"></div>
+        <div class="field"><label>Paste results here</label><textarea id="bulk-leg-text" rows="10" style="width:100%; font-family:monospace; font-size:13px; padding:10px; border:2px solid var(--ink); border-radius:10px;">${bi.rawText}</textarea></div>
+        <button class="pf-btn" data-action="solocircuit-parse-bulk" style="margin-top:10px;">Parse Results</button>
+      </div>
+      ${bi.parsed ? renderSoloCircuitBulkPreview(bi) : ""}
+    </div>`;
 }
 function renderSoloCircuitBulkPreview(bi){
   const p = bi.parsed;
   return `
-    <div class="card" style="border-color:var(--court);">
+    <div class="pf-card">
       <p class="eyebrow">Preview \u2014 ${p.finalMatches.length} matches, ${p.players.length} players</p>
       ${p.errors.length ? `
         <p class="sub" style="color:#B0413E;"><b>${p.errors.length} line${p.errors.length===1?"":"s"} couldn't be parsed</b> \u2014 fix these in the text above and re-parse:</p>
@@ -4080,7 +4111,7 @@ function renderSoloCircuitBulkPreview(bi){
       ` : ""}
       <p class="eyebrow" style="margin-top:14px;">Players (${p.players.length})</p>
       <div class="chip-group">${p.players.map(name=>`<span class="chip active">${name} <span class="help" style="color:inherit;">(${p.playerCounts[name]})</span></span>`).join("")}</div>
-      <button class="btn btn-ink btn-wide" data-action="solocircuit-confirm-bulk" style="margin-top:16px;" ${p.errors.length?"disabled":""}>Confirm &amp; Import</button>
+      <button class="pf-btn" data-action="solocircuit-confirm-bulk" style="margin-top:16px;" ${p.errors.length?"disabled":""}>Confirm &amp; Import</button>
       ${p.errors.length ? `<p class="help" style="text-align:center; color:#B0413E;">Fix the unparsed lines above before importing.</p>` : ""}
     </div>`;
 }
@@ -4220,21 +4251,21 @@ function renderSoloCircuitEvent(){
   const tab = state.soloCircuitViewTab;
 
   const tabBar = `
-    <div class="sc-tabs">
-      <div class="sc-tab ${tab==="overall"?"active":""}" data-action="solocircuit-set-tab" data-tab="overall">Overall</div>
-      ${c.legs.map(leg=>`<div class="sc-tab ${tab===leg.id?"active":""}" data-action="solocircuit-set-tab" data-tab="${leg.id}">${leg.name}</div>`).join("")}
+    <div class="pf-tabs">
+      <div class="pf-tab ${tab==="overall"?"active":""}" data-action="solocircuit-set-tab" data-tab="overall">Overall</div>
+      ${c.legs.map(leg=>`<div class="pf-tab ${tab===leg.id?"active":""}" data-action="solocircuit-set-tab" data-tab="${leg.id}">${leg.name}</div>`).join("")}
     </div>`;
 
   let content;
   if(tab==="overall" || !c.legs.find(l=>l.id===tab)){
     const standings = computeCircuitStandings(c);
     content = `
-    <div class="card">
+    <div class="pf-card">
       <p class="eyebrow">Circuit Standings</p>
       <p class="sub" style="margin-top:0;">Cumulative across every leg a player has taken part in.</p>
       ${!standings.length ? `<p class="help">No completed matches yet.</p>` : renderSoloCircuitStandingsTable(standings, true)}
     </div>
-    <div class="card">
+    <div class="pf-card">
       <p class="eyebrow">Head-to-Head</p>
       <p class="sub" style="margin-top:0;">Across every leg they've both played in this circuit.</p>
       <div class="row">
@@ -4247,13 +4278,13 @@ function renderSoloCircuitEvent(){
           ${c.players.map(p=>`<option value="${p.name}" ${state.soloCircuitH2H && state.soloCircuitH2H.b===p.name?"selected":""}>${p.name}</option>`).join("")}
         </select></div>
       </div>
-      <button class="btn btn-ink btn-wide" data-action="solocircuit-compare-h2h">Compare</button>
+      <button class="pf-btn" data-action="solocircuit-compare-h2h">Compare</button>
       ${state.soloCircuitH2H ? renderSoloCircuitH2HResult() : ""}
     </div>
     ${state.adminUser ? `
-    <div class="card">
+    <div class="pf-card">
       <p class="eyebrow">Add a Leg</p>
-      <button class="btn btn-outline btn-sm" data-action="go-solocircuit-bulk" style="margin-bottom:12px;">Bulk-import results instead</button>
+      <button class="pf-btn-outline" data-action="go-solocircuit-bulk" style="margin-bottom:12px; width:100%;">Bulk-import results instead</button>
       <div class="row">
         <div class="field"><label>Leg name</label><input type="text" id="leg-name-input" placeholder="e.g. Leg ${c.legs.length+1}"></div>
         <div class="field"><label>Venue</label><input type="text" id="leg-venue-input" placeholder="e.g. Colombo Courts"></div>
@@ -4268,18 +4299,18 @@ function renderSoloCircuitEvent(){
         <div class="field"><label>New player name</label><input type="text" id="solocircuit-new-leg-player" list="playerNamesHome" placeholder="Player name"></div>
         <button class="btn btn-outline btn-sm" data-action="solocircuit-add-new-leg-player" style="height:44px;">Add to Circuit</button>
       </div>
-      <button class="btn btn-ink btn-wide" data-action="solocircuit-create-leg" style="margin-top:14px;" ${state.soloCircuitLegSetup.selectedPlayers.length<2?"disabled":""}>Create Leg &amp; Generate Matches</button>
+      <button class="pf-btn" data-action="solocircuit-create-leg" style="margin-top:14px;" ${state.soloCircuitLegSetup.selectedPlayers.length<2?"disabled":""}>Create Leg &amp; Generate Matches</button>
     </div>` : ""}`;
   } else {
     const leg = c.legs.find(l=>l.id===tab);
     const standings = computeLegStandings(leg);
     content = `
-    <div class="card">
+    <div class="pf-card">
       <p class="eyebrow">${leg.name}</p>
       <p class="sub" style="margin-top:0;">${leg.venue||"No venue set"} ${leg.date?"&middot; "+leg.date:""}</p>
       ${renderSoloCircuitStandingsTable(standings, false)}
     </div>
-    <div class="card">
+    <div class="pf-card">
       <p class="eyebrow">Matches</p>
       ${leg.matches.map(m=>`
         <div class="match-card">
@@ -4289,12 +4320,12 @@ function renderSoloCircuitEvent(){
           ${state.adminUser ? `<button class="btn ${m.status==='complete'?'btn-outline':'btn-ink'} btn-sm" data-action="solocircuit-edit-match" data-match="${m.id}">${m.status==="complete"?"Edit Score":"Enter Score"}</button>` : ""}
         </div>
         ${state.soloCircuitEditingMatch===m.id && state.adminUser ? `
-        <div class="match-card" style="background:var(--court); flex-wrap:wrap;">
-          <div class="field" style="min-width:110px;"><label style="color:#DCEDEA;">${m.a}</label><input type="number" min="0" id="sc-scoreA-${m.id}" value="${m.scoreA!=null?m.scoreA:''}"></div>
-          <div class="field" style="min-width:110px;"><label style="color:#DCEDEA;">${m.b}</label><input type="number" min="0" id="sc-scoreB-${m.id}" value="${m.scoreB!=null?m.scoreB:''}"></div>
+        <div class="match-card" style="background:var(--pf-black); flex-wrap:wrap;">
+          <div class="field" style="min-width:110px;"><label style="color:var(--pf-neon);">${m.a}</label><input type="number" min="0" id="sc-scoreA-${m.id}" value="${m.scoreA!=null?m.scoreA:''}"></div>
+          <div class="field" style="min-width:110px;"><label style="color:var(--pf-neon);">${m.b}</label><input type="number" min="0" id="sc-scoreB-${m.id}" value="${m.scoreB!=null?m.scoreB:''}"></div>
           <div style="flex:1 1 100%; display:flex; gap:8px; margin-top:6px;">
-            <button class="btn btn-ink btn-sm" data-action="solocircuit-save-match" data-match="${m.id}">Save</button>
-            <button class="btn btn-outline btn-sm" data-action="solocircuit-cancel-edit" style="border-color:#fff; color:#fff;">Cancel</button>
+            <button class="pf-btn" data-action="solocircuit-save-match" style="flex:1;" data-match="${m.id}">Save</button>
+            <button class="pf-btn-outline" data-action="solocircuit-cancel-edit">Cancel</button>
           </div>
         </div>` : ""}
       `).join("")}
@@ -4303,66 +4334,74 @@ function renderSoloCircuitEvent(){
 
   return `
     <button class="back-link" data-action="go-home">&larr; Back to Home</button>
-    <div class="card" style="background:var(--court); border-color:var(--ink);">
-      <p class="eyebrow" style="color:var(--ball);">Solo Circuit</p>
-      <h2 style="color:#fff;">${c.name}</h2>
-      <p class="sub" style="color:#DCEDEA;">Circuit Code: <b style="color:var(--ball); font-size:18px; letter-spacing:0.1em;">${c.code}</b></p>
-    </div>
-    ${tabBar}
-    ${content}`;
+    <div class="pf-page">
+      <div class="pf-header">
+        <img class="pf-badge" src="/pickleforce-badge.png" alt="Pickle Force">
+        <img class="pf-wordmark" src="/soloCircuit-wordmark.png" alt="Solo Circuit by Pickle Force">
+        <p class="pf-eyebrow">${c.name}</p>
+        <p class="pf-sub">Code: <span class="pf-code-pill">${c.code}</span></p>
+      </div>
+      ${tabBar}
+      ${content}
+    </div>`;
 }
 function renderSoloCircuitList(){
-  if(state.soloCircuitListLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading circuits\u2026</div>`;
+  if(state.soloCircuitListLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
   const list = state.soloCircuitList || [];
   return `
     <button class="back-link" data-action="go-home">&larr; Back to Home</button>
-    <div class="card" style="background:var(--kitchen);">
-      <p class="eyebrow">Solo Circuits</p>
-      <h2>All Circuits</h2>
-      <p class="sub">Open one to see standings, head-to-head, and upcoming fixtures &mdash; no code needed.</p>
-    </div>
-    ${state.adminUser ? `
-    <div class="card">
-      <button class="btn btn-ink btn-wide" data-action="go-solocircuit-setup">+ Create New Circuit</button>
-    </div>` : ""}
-    ${!list.length ? `<div class="card"><p class="help">No Solo Circuits yet.</p></div>` : list.map(c=>`
-      <div class="match-card">
-        <div style="flex:2; min-width:180px; cursor:pointer;" data-action="solocircuit-list-open" data-code="${c.code}">
-          <div style="font-weight:800;">${c.name}</div>
-          <div class="help" style="margin:2px 0 0;">${c.playerCount} player${c.playerCount===1?"":"s"} &middot; ${c.legCount} leg${c.legCount===1?"":"s"}</div>
-        </div>
-        <button class="btn btn-outline btn-sm" data-action="solocircuit-list-open" data-code="${c.code}">View</button>
-        ${state.adminUser ? `<button class="remove-btn" data-action="solocircuit-list-delete" data-key="${c.key}">Delete</button>` : ""}
-      </div>`).join("")}`;
+    <div class="pf-page">
+      <div class="pf-header">
+        <img class="pf-badge" src="/pickleforce-badge.png" alt="Pickle Force">
+        <p class="pf-eyebrow">Pickle Force</p>
+        <h2 class="pf-title">Pickle Force Tournaments</h2>
+      </div>
+      ${state.adminUser ? `<button class="pf-btn" data-action="go-solocircuit-setup" style="margin-bottom:14px;">+ Create New Tournament</button>` : ""}
+      ${!list.length ? `<p class="pf-sub">No tournaments yet.</p>` : list.map(c=>`
+        <div class="pf-listrow">
+          <div style="flex:2; min-width:180px; cursor:pointer;" data-action="solocircuit-list-open" data-code="${c.code}">
+            <div style="font-weight:800;">${c.name}</div>
+            <div class="help" style="margin:2px 0 0;">${c.playerCount} player${c.playerCount===1?"":"s"} &middot; ${c.legCount} leg${c.legCount===1?"":"s"}</div>
+          </div>
+          <button class="pf-btn-outline" data-action="solocircuit-list-open" data-code="${c.code}" style="border-color:var(--court); color:var(--court);">View</button>
+          ${state.adminUser ? `<button class="remove-btn" data-action="solocircuit-list-delete" data-key="${c.key}">Delete</button>` : ""}
+        </div>`).join("")}
+    </div>`;
 }
 function renderSoloCircuitSetup(){
   if(state.soloCircuitLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
   const f = state.soloCircuitSetup;
   return `
-    <button class="back-link" data-action="go-solocircuit">&larr; Back to All Circuits</button>
-    ${!state.adminUser ? `
-    <div class="card">
-      <p class="eyebrow">Setting up a new circuit</p>
-      <p class="sub">Creating and managing a Solo Circuit is an admin action. Ask your organizer to set one up \u2014 anyone can view standings and head-to-head once it exists, no login needed for that.</p>
-    </div>` : `
-    <div class="card">
-      <p class="eyebrow">Solo Circuit</p>
-      <h2>Set up a new circuit</h2>
-      <p class="sub">Singles league play across multiple legs (venues), with cumulative circuit standings. Kept separate from doubles tournaments and recreational stats.</p>
-      <div class="field"><label>Circuit name</label><input type="text" id="solocircuit-name" value="${f.name}"></div>
-    </div>
-    <div class="card">
-      <p class="eyebrow">Players</p>
-      <p class="sub" style="margin-top:0;">Add the full player pool for this circuit. You'll pick who's in each leg separately.</p>
-      <div class="player-add-row">
-        <div class="field"><label>Player name</label><input type="text" id="solocircuit-player-name" list="playerNamesHome" placeholder="Player name"></div>
-        <div class="field dupr"><label>DUPR</label><input type="text" id="solocircuit-player-dupr" placeholder="3.5"></div>
-        <button class="btn btn-ink btn-sm" data-action="solocircuit-add-player" style="height:44px;">Add</button>
+    <button class="back-link" data-action="go-solocircuit">&larr; Back to Pickle Force Tournaments</button>
+    <div class="pf-page">
+      <div class="pf-header">
+        <img class="pf-badge" src="/pickleforce-badge.png" alt="Pickle Force">
+        <p class="pf-eyebrow">Pickle Force</p>
+        <h2 class="pf-title">New Tournament</h2>
       </div>
-      ${f.players.length ? `<div class="chip-group">${f.players.map((p,i)=>`<span class="chip active" data-action="solocircuit-remove-player" data-idx="${i}" style="cursor:pointer;">${p.name}${p.dupr?` (${p.dupr})`:""} &times;</span>`).join("")}</div>` : `<p class="help">No players added yet.</p>`}
-      <button class="btn btn-ink btn-wide" data-action="solocircuit-create" ${f.players.length<2?"disabled":""} style="margin-top:14px;">Create Circuit</button>
-      <button class="btn btn-outline btn-wide" data-action="go-solocircuit-bulk" style="margin-top:8px;">Or bulk-import a leg's results instead</button>
-    </div>`}`;
+      ${!state.adminUser ? `
+      <div class="pf-card">
+        <p class="eyebrow">Setting up a new circuit</p>
+        <p class="sub">Creating and managing a Pickle Force tournament is an admin action. Ask your organizer to set one up \u2014 anyone can view standings and head-to-head once it exists, no login needed for that.</p>
+      </div>` : `
+      <div class="pf-card">
+        <p class="eyebrow">Circuit details</p>
+        <p class="sub">Singles league play across multiple legs (venues), with cumulative circuit standings. Kept separate from doubles tournaments and recreational stats.</p>
+        <div class="field"><label>Circuit name</label><input type="text" id="solocircuit-name" value="${f.name}"></div>
+      </div>
+      <div class="pf-card">
+        <p class="eyebrow">Players</p>
+        <p class="sub" style="margin-top:0;">Add the full player pool for this circuit. You'll pick who's in each leg separately.</p>
+        <div class="player-add-row">
+          <div class="field"><label>Player name</label><input type="text" id="solocircuit-player-name" list="playerNamesHome" placeholder="Player name"></div>
+          <div class="field dupr"><label>DUPR</label><input type="text" id="solocircuit-player-dupr" placeholder="3.5"></div>
+          <button class="btn btn-ink btn-sm" data-action="solocircuit-add-player" style="height:44px;">Add</button>
+        </div>
+        ${f.players.length ? `<div class="chip-group">${f.players.map((p,i)=>`<span class="chip active" data-action="solocircuit-remove-player" data-idx="${i}" style="cursor:pointer;">${p.name}${p.dupr?` (${p.dupr})`:""} &times;</span>`).join("")}</div>` : `<p class="help">No players added yet.</p>`}
+        <button class="pf-btn" data-action="solocircuit-create" ${f.players.length<2?"disabled":""} style="margin-top:14px;">Create Circuit</button>
+        <button class="pf-btn-outline" data-action="go-solocircuit-bulk" style="margin-top:8px; width:100%;">Or bulk-import a leg's results instead</button>
+      </div>`}
+    </div>`;
 }
 function renderTypickleSetup(){
   if(state.typickleLoading) return `<button class="back-link" data-action="go-home">&larr; Back</button><div class="empty">Loading\u2026</div>`;
@@ -5204,7 +5243,7 @@ function renderAdminDashboard(){
         </div>`).join("")}
     </div>
     <div class="card" style="border-color:var(--kitchen);">
-      <p class="eyebrow">Solo circuits (${state.adminSoloCircuits?state.adminSoloCircuits.length:0})</p>
+      <p class="eyebrow">Pickle Force Tournaments (${state.adminSoloCircuits?state.adminSoloCircuits.length:0})</p>
       <p class="sub" style="margin-top:0;">Singles league circuits &mdash; separate from regular sessions and Typickle tournaments.</p>
       <button class="btn btn-outline btn-sm" data-action="admin-refresh-solo-circuits" style="margin-bottom:10px;">Refresh list</button>
       ${!state.adminSoloCircuits || !state.adminSoloCircuits.length ? `<p class="help">No Solo Circuits found.</p>` : state.adminSoloCircuits.map(c=>`
